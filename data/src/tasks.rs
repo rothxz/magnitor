@@ -305,7 +305,7 @@ pub fn graph(history: &VecDeque<Load>) -> (String, String) {
     (user, system)
 }
 
-fn pressure(level: i32) -> &'static str {
+pub fn pressure(level: i32) -> &'static str {
     match level {
         4 => "Critical",
         2 => "Warning",

@@ -7,6 +7,8 @@
     "dev": "EXACT_IDENTITY=- bun exact.mjs mac --run"
   },
   "dependencies": {
-    "@exact/child-process": "file:../exact/packages/child-process"
+    "@exact/child-process": "file:../exact/packages/child-process",
+    "@exact/notifications": "file:../exact/packages/notifications",
+    "@exact/global-shortcuts": "file:../exact/packages/global-shortcuts"
   }
 }

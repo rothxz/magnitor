@@ -6,10 +6,16 @@
       "name": "storage",
       "dependencies": {
         "@exact/child-process": "file:../exact/packages/child-process",
+        "@exact/global-shortcuts": "file:../exact/packages/global-shortcuts",
+        "@exact/notifications": "file:../exact/packages/notifications",
       },
     },
   },
   "packages": {
     "@exact/child-process": ["@exact/child-process@file:../exact/packages/child-process", {}],
+
+    "@exact/global-shortcuts": ["@exact/global-shortcuts@file:../exact/packages/global-shortcuts", {}],
+
+    "@exact/notifications": ["@exact/notifications@file:../exact/packages/notifications", {}],
   }
 }

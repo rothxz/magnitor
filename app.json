@@ -32,5 +32,29 @@
       "type": "storage_data::Storage"
     },
     "placement": "worker"
-  }
+  },
+  "widgets": [
+    {
+      "kind": "vitals",
+      "title": "Storage",
+      "description": "Your Mac's CPU, memory and free disk space.",
+      "families": [
+        "systemSmall",
+        "systemMedium"
+      ],
+      "component": "VitalsWidget",
+      "props": "VitalsWidgetProps",
+      "refresh": "widgetVitals",
+      "preview": {
+        "shows": "all",
+        "cpu": 23,
+        "memory": 61,
+        "pressure": "Normal",
+        "free": "212 GB",
+        "freeShare": 0.43,
+        "updated": "Updated 9:41",
+        "ready": true
+      }
+    }
+  ]
 }

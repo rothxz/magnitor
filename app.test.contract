@@ -11,6 +11,8 @@
 //   Documents 320 KiB, Downloads 240 KiB, Desktop 4 KiB, Movies empty, no Pictures or Music
 // tools/df.json reports a disk of 1e9 KiB with 5e8 KiB free; Spotlight's scripts name
 // com.alpha "Alpha".
+// tools/home/.vitals stands in for the machine's load (the Rust `vitals` source reads it under
+// the agent only): CPU 97%, memory 62%, normal pressure.
 // A menu bar app shows no window: each test opens the stats popover from the status item
 // first, as a person does, once the menu bar has laid the item out (a moment after launch,
 // on real time): the popover points at it.
@@ -235,3 +237,106 @@ test "sorting and a search that matches nothing"
   type "search" "no-such-process-here"
   clock data
   expect text "no-match" == "No process matches “no-such-process-here”."
+
+// Settings. The gear in the popover's footer (⌘,) opens the Mac's Settings window; these open
+// Settings at its route in the main window (`at "/settings"`), where it is a screen over the
+// app with Done. tools/home/.vitals is the machine under load: CPU 97%, memory 62%. The main
+// window watches it every five seconds while the widget is kept up to date (the default).
+
+test "a recorded shortcut is kept; a key without ⌘ or ⌃ is refused, and Clear forgets it"
+  at "/settings"
+  expect text "hotkey" == "Record Shortcut"
+  expect text "hotkey-note" == "Choose keys that open Storage from any app."
+  tap "hotkey"
+  expect state recording == true
+  expect text "hotkey-note" == "Press the keys together. Escape cancels."
+  type "hotkey" key "s"
+  expect text "hotkey-note" == "Use ⌘ or ⌃ with another key, such as ⌃⌥⌘S."
+  expect state hotkey == ""
+  type "hotkey" key "Control+Alt+Meta+s"
+  clock data
+  expect state hotkey == "Control+Alt+Meta+S"
+  expect state recording == false
+  expect text "hotkey" == "⌃⌥⌘S"
+  expect text "hotkey-note" == "Press ⌃⌥⌘S in any app to open Storage."
+  tap "hotkey-clear"
+  expect state hotkey == ""
+  expect text "hotkey" == "Record Shortcut"
+  tap "hotkey"
+  type "hotkey" key "Alt+Meta+ArrowUp"
+  expect state hotkey == "Alt+Meta+ArrowUp"
+  expect text "hotkey" == "⌥⌘↑"
+  reload
+  expect state hotkey == "Alt+Meta+ArrowUp"
+
+test "Escape stops recording and keeps the shortcut"
+  at "/settings"
+  tap "hotkey"
+  type "hotkey" key "Escape"
+  expect state recording == false
+  expect state hotkey == ""
+
+test "the menu bar item shows the chosen icon, or the load in its place"
+  at "/settings"
+  expect state trayShow == "icon"
+  expect state trayLabel == "Storage"
+  tap "tray-icon-cpu"
+  expect state trayIcon == "cpu"
+  type "tray-show" "both"
+  expect tree missing "tray-icon"
+  clock +2000
+  clock data
+  clock +2000
+  clock data
+  expect state vitals.cpu == 97
+  expect state trayLabel == "CPU 97% · MEM 62%"
+  type "tray-show" "cpu"
+  expect state trayLabel == "CPU 97%"
+  reload
+  expect state trayShow == "cpu"
+  expect state trayIcon == "cpu"
+
+test "CPU held over its limit for the chosen time posts one alert; memory under its limit posts none"
+  at "/settings"
+  prefer permission.notifications granted
+  tap "alerts-on"
+  expect state alertsOn == true
+  type "sustain" "10"
+  clock +5000
+  clock data
+  clock +5000
+  clock data
+  expect state cpuAlerted == false
+  clock +5000
+  clock data
+  clock +5000
+  clock data
+  expect state cpuAlerted == true
+  expect state memoryAlerted == false
+  expect state diskAlerted == false
+  clock +5000
+  clock data
+  expect state cpuAlerted == true
+
+test "no alert while alerts are off"
+  at "/settings"
+  clock +30000
+  clock data
+  expect state alertsOn == false
+  expect state cpuAlerted == false
+
+test "the widget shows the last reading, as Settings previews it"
+  at "/settings"
+  expect text "widget-empty" == "Open Storage to see your Mac’s load here."
+  clock +5000
+  clock data
+  clock +5000
+  clock data
+  expect text "widget-cpu" == "97%"
+  expect text "widget-memory" == "62%"
+  expect text "widget-disk" == "512 GB free"
+  type "widget-shows" "disk"
+  clock +5000
+  clock data
+  expect tree missing "widget-cpu"
+  expect text "widget-disk" == "512 GB free"

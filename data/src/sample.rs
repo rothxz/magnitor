@@ -54,7 +54,14 @@ pub struct RawSample {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{end, take};
+pub use mac::{end, system, take};
+
+/// The machine's counters alone, without a process: the menu bar's readout and the alerts read
+/// these every few seconds.
+#[cfg(not(target_os = "macos"))]
+pub fn system() -> Result<RawSystem, String> {
+    Err("Storage reads the CPU and memory on macOS only.".into())
+}
 
 #[cfg(not(target_os = "macos"))]
 pub fn take() -> Result<RawSample, String> {
@@ -365,7 +372,11 @@ mod mac {
         parse_ps(&String::from_utf8_lossy(&out.stdout)).into_iter().map(|p| (p.pid, p)).collect()
     }
 
-    fn system() -> RawSystem {
+    pub fn system() -> Result<RawSystem, String> {
+        Ok(counters())
+    }
+
+    fn counters() -> RawSystem {
         let mut ticks = [0u32; 4];
         let mut count = 4u32;
         unsafe { host_statistics(host(), HOST_CPU_LOAD_INFO, ticks.as_mut_ptr() as *mut c_int, &mut count) };
@@ -413,7 +424,7 @@ mod mac {
                 }
             }
         }
-        Ok(RawSample { procs, system: system() })
+        Ok(RawSample { procs, system: counters() })
     }
 
     /// SIGTERM, or SIGKILL when forced; the errno when refused.

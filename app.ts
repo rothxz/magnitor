@@ -1,9 +1,13 @@
 // Storage: the quick sources. The Rust crate in data/ answers `usage` and `contents`, walking the
 // folders on many threads; this answers the disk's size with `df`, the apps' names from
-// Spotlight, Clear Cache with `trash` and Show in Finder with `open`. Every child runs with
+// Spotlight, Clear Cache with `trash` and Show in Finder with `open`, and keeps the desktop
+// widget's reading (`saveWidget`, which the widget's `widgetVitals` reads). Every child runs with
 // the home directory as its working directory, so paths here are relative to it.
 import type { Result, Storage, TypeScriptAnswer, TypeScriptSources } from './app.contract.d.ts';
 import { execFile } from '@exact/child-process';
+
+// The widget's last reading, written by the app and read by the widget's refresh.
+const WIDGET_FILE = 'app:/data/widget.json';
 
 export const grants = [
   'process.spawn /bin/df',
@@ -13,6 +17,10 @@ export const grants = [
   'process.spawn /usr/bin/open',
   'fs.read home:/Library/Caches',
   'fs.read home:/Library/Developer/Xcode/DerivedData',
+  'fs.read app:/data/widget.json',
+  'fs.write app:/data/widget.json',
+  'device.notifications purpose.notifications',
+  'device.global-shortcuts',
 ].join('\n');
 
 // The cache folders Clear Cache empties. This app's own cache stays: it is in use.
@@ -80,12 +88,12 @@ async function cacheEntries(storage: Storage): Promise<string[]> {
 
 // The sources Rust does not answer (data/src/lib.rs's RUST_SOURCES).
 const sources: TypeScriptSources = {
-  disk: async ([_generation]): Promise<Result<'disk'>> => {
+  disk: async ([_generation, _minute]): Promise<Result<'disk'>> => {
     try {
       const { size, free } = parseDf(await run('/bin/df', ['-k', '.']));
-      return { size, free: formatBytes(free) };
+      return { size, free: formatBytes(free), freeBytes: free };
     } catch {
-      return { size: 0, free: '' };
+      return { size: 0, free: '', freeBytes: 0 };
     }
   },
   // The name of the app that keeps each cache folder, in the folders' order ("" for none):
@@ -121,7 +129,44 @@ const sources: TypeScriptSources = {
       return { ok: false, message: `Couldn’t clear the cache: ${(e as Error).message}` };
     }
   },
+  // The app's reading for the widget, kept until the next; the widget's timeline reloads after it.
+  saveWidget: async ([shows, cpu, memory, pressure, free, freeShare, at], _store, storage): Promise<Result<'saveWidget'>> => {
+    const reading: WidgetReading = { shows, cpu, memory, pressure, free, freeShare, at };
+    try {
+      await storage.fs.atomicWriteFile(WIDGET_FILE, new TextEncoder().encode(JSON.stringify(reading)));
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  },
+  // The desktop widget's one entry: the app's last reading, or a note to open the app.
+  widgetVitals: async ([date], _store, storage): Promise<Result<'widgetVitals'>> => {
+    let props: WidgetProps = NO_READING;
+    try {
+      props = widgetProps(JSON.parse(new TextDecoder().decode(await storage.fs.readFile(WIDGET_FILE))));
+    } catch {
+      // No reading yet ('bake', the build, passes here too).
+    }
+    return [{ date, props }];
+  },
 };
+
+type WidgetProps = Result<'widgetVitals'>[number]['props'];
+interface WidgetReading { shows: string; cpu: number; memory: number; pressure: string; free: string; freeShare: number; at: number }
+
+const NO_READING: WidgetProps = {
+  shows: 'all', cpu: 0, memory: 0, pressure: '', free: '', freeShare: 0,
+  updated: 'Open Storage to start', ready: false,
+};
+
+// The reading as the widget shows it, with the time it was taken.
+export function widgetProps(r: WidgetReading): WidgetProps {
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(r.at));
+  return {
+    shows: r.shows, cpu: r.cpu, memory: r.memory, pressure: r.pressure, free: r.free, freeShare: r.freeShare,
+    updated: `Updated ${time}`, ready: true,
+  };
+}
 
 export const answer: TypeScriptAnswer = (source, args, store, storage, native) =>
   sources[source](args, store, storage, native);

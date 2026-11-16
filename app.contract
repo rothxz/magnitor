@@ -5,6 +5,20 @@
 // `accessory`) and shows no window: the status item opens the `stats` popover,
 // AppKit's NSPopover pointing at the item, with the system's material (Liquid
 // Glass on macOS 26 and later). A folder's row opens its contents in the popover.
+//
+// The gear in the popover's footer (and ⌘,) opens Settings, the Mac's Settings window: a
+// keyboard shortcut that opens the popover from any app, what the menu bar item shows, the
+// desktop widget (app.json's `widgets`, drawn by `VitalsWidget` from the reading `saveWidget`
+// keeps) and alerts, a notification when the CPU, memory or free disk space crosses a limit.
+// Settings are `persist` states, which the two windows share; the main window alone watches
+// the machine (`vitals`, the Rust crate's) and holds the shortcut.
+use globalShortcut, checkGlobalShortcut, globalshortcut, GlobalShortcut, GlobalShortcutCheck, GlobalShortcutEvent from "@exact/global-shortcuts"
+use showNotification, notificationStatus, requestNotificationPermission, notificationclick, NotificationStatus, NotificationEvent from "@exact/notifications"
+
+routes nav
+  home "/"
+    settings "/settings"
+
 shape Slice
   id: string
   name: string
@@ -28,6 +42,7 @@ shape Usage
 shape Disk
   size: number
   free: string
+  freeBytes: number
 
 shape AppName
   id: string
@@ -103,6 +118,43 @@ shape Ended
   ok: bool
   message: string
 
+// The machine's load alone, read every few seconds while something shows or watches it.
+shape Vitals
+  // Busy share of every core, 0 to 100.
+  cpu: number
+  // Share of memory used, 0 to 100.
+  memory: number
+  pressure: string
+  memoryUsed: string
+  error: string
+
+// Which window this session draws: "main", or "settings" for the Settings window.
+shape Page
+  name: string
+
+shape Saved
+  ok: bool
+
+// One entry of the widget's timeline, as its refresh (app.ts's `widgetVitals`) answers it.
+shape WidgetEntry
+  date: number
+  props: VitalsWidgetProps
+
+shape Clock
+  epochAtZero: number
+
+// The desktop widget's reading (app.json's `widgets`).
+shape VitalsWidgetProps
+  // "all", "system" (CPU and memory) or "disk".
+  shows: string
+  cpu: number
+  memory: number
+  pressure: string
+  free: string
+  freeShare: number
+  updated: string
+  ready: bool
+
 fn sliceColor(id: string): string = id == "caches" ? "-exact-system-orange" : id == "derived" ? "-exact-system-red" : id == "documents" ? "-exact-system-blue" : id == "downloads" ? "-exact-system-teal" : id == "desktop" ? "-exact-system-indigo" : id == "pictures" ? "-exact-system-green" : id == "movies" ? "-exact-system-purple" : "-exact-system-yellow"
 
 // A share as Finder words it: 9.3%, <0.1%.
@@ -121,6 +173,27 @@ fn sortLabel(key: string): string = key == "cpu" ? "CPU" : key == "memory" ? "Me
 
 // Activity Monitor's memory pressure colours.
 fn pressureColor(p: string): string = p == "Critical" ? "-exact-system-red" : p == "Warning" ? "-exact-system-yellow" : "-exact-system-green"
+
+// A chord as the Mac's menus write it: Control+Alt+Meta+S is ⌃⌥⌘S.
+fn keyGlyph(k: string): string = k == "Control" ? "⌃" : k == "Alt" ? "⌥" : k == "Shift" ? "⇧" : k == "Meta" ? "⌘" : k == "ArrowUp" ? "↑" : k == "ArrowDown" ? "↓" : k == "ArrowLeft" ? "←" : k == "ArrowRight" ? "→" : k == "Enter" ? "↩" : k == "Backspace" ? "⌫" : k == "Delete" ? "⌦" : k == "Tab" ? "⇥" : k == "Space" ? "Space" : k
+fn chordText(keys: string): string = keys.split("+").map(k => keyGlyph(k)).join("")
+// A press's key as a chord names it: the physical key for a letter or digit, so the chord is
+// the same under any keyboard layout.
+fn chordKey(e: KeyboardEvent): string = e.code.startsWith("Key") ? e.code.slice(3) : e.code.startsWith("Digit") ? e.code.slice(5) : e.key == " " ? "Space" : e.key.length == 1 ? e.key.toUpperCase() : e.key
+fn chordOf(e: KeyboardEvent): string = [e.ctrlKey ? "Control" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.metaKey ? "Meta" : "", chordKey(e)].filter(p => p != "").join("+")
+fn isModifier(k: string): bool = k == "Meta" or k == "Control" or k == "Alt" or k == "Shift" or k == "CapsLock" or k == "Fn"
+fn checkProblem(c: GlobalShortcutCheck): string = c.registered ? "" : match c.reason { case some(r) => r == "in-use" ? `Another app uses ${chordText(c.keys)}. Choose another shortcut.` : r == "reserved" ? `macOS keeps ${chordText(c.keys)} for itself. Choose another shortcut.` : `Storage can’t use ${chordText(c.keys)}. Choose another shortcut.`, case none => `Storage can’t use ${chordText(c.keys)}. Choose another shortcut.` }
+
+// The menu bar item's symbol for each icon style.
+fn trayIconSymbol(icon: string): string = icon == "gauge" ? "symbol:sf/gauge.with.dots.needle.33percent" : icon == "cpu" ? "symbol:sf/cpu" : icon == "memory" ? "symbol:sf/memorychip" : icon == "disk" ? "symbol:sf/internaldrive" : icon == "chart" ? "symbol:sf/chart.pie" : "symbol:sf/waveform.path.ecg"
+fn trayIconName(icon: string): string = icon == "gauge" ? "Gauge" : icon == "cpu" ? "Chip" : icon == "memory" ? "Memory" : icon == "disk" ? "Disk" : icon == "chart" ? "Pie Chart" : "Waveform"
+// The menu bar item's title when it shows the load instead of an icon: "–" before a reading.
+fn trayTitle(show: string, v: Vitals): string = v.pressure == "" ? (show == "cpu" ? "CPU –" : "CPU – · MEM –") : show == "cpu" ? `CPU ${round(v.cpu)}%` : `CPU ${round(v.cpu)}% · MEM ${round(v.memory)}%`
+
+fn number(v: string): number = match parseNumber(v) { case some(n) => n, case none => 0 }
+fn limitText(n: number): string = n == 0 ? "Never" : `${n}%`
+fn diskLimitText(gb: number): string = gb == 0 ? "Never" : `${gb} GB`
+fn sustainText(s: number): string = s < 60 ? `${s} ${s == 1 ? "second" : "seconds"}` : `${s / 60} ${s == 60 ? "minute" : "minutes"}`
 
 fn processes(n: number): string = `${n} ${n == 1 ? "process" : "processes"}`
 fn countText(n: number, more: number): string = more > 0 ? `${processes(n)} · ${more} more match: search to find one` : processes(n)
@@ -171,11 +244,13 @@ component Storage
   state notice = ""
   // The folder whose contents the popover shows; "" for the overview.
   state opened = ""
-  resource usage = usage(generation) as shape Usage else empty()
+  // The Settings window draws Settings alone, so the folders are measured in the main one.
+  resource usage = usage(generation) when isMain as shape Usage else empty()
   resource contents = contents(opened, generation) when opened != "" as shape Contents else empty()
-  resource disk = disk(generation) as shape Disk else empty()
+  // Asked again after each measure and each minute the main window watches (`diskPulse`).
+  resource disk = disk(generation, diskPulse) when isMain as shape Disk else empty()
   // Asked with no folders at launch, which loads Spotlight's list ahead of App caches.
-  resource names = appNamesFor(cacheFolders) as shape AppName[] else empty()
+  resource names = appNamesFor(cacheFolders) when isMain as shape AppName[] else empty()
   mutation cleared as shape Cleared then afterClear
   mutation revealed as shape Revealed
   // Activity Monitor: a reading each tick, sorted and searched in Rust.
@@ -187,11 +262,74 @@ component Storage
   // "quit" or "force" while Quit or Force Quit waits to be confirmed.
   state ending = ""
   state endNotice = ""
-  resource tasks = tasks(tick, sort, query) when tab == "tasks" as shape Tasks else empty()
+  resource tasks = tasks(tick, sort, query) when isMain and tab == "tasks" as shape Tasks else empty()
   resource info = process(inspected, tick) when tab == "tasks" and inspected != -1 as shape ProcInfo else empty()
   mutation ended as shape Ended then afterEnd
   task sampler when tab == "tasks" and shown
     every(2000, sample)
+
+  resource page = exactPage() as shape Page
+  // The date now is the clock's epoch at zero plus performanceNow().
+  resource clock = exactTime() as shape Clock
+  derive isMain = page.name == "main"
+
+  // Settings, kept across launches and shared by the windows.
+  // The keyboard shortcut that opens the popover from any app, as `aria-keyshortcuts` names it.
+  state hotkey = "" persist
+  // What the menu bar item shows: "icon", "cpu" or "both" (CPU and memory).
+  state trayShow = "icon" persist
+  state trayIcon = "waveform" persist
+  state widgetOn = true persist
+  // What the widget shows: "all", "system" (CPU and memory) or "disk".
+  state widgetShows = "all" persist
+  state alertsOn = false persist
+  // The limits, 0 for never: CPU and memory in percent, free disk space in GB.
+  state cpuLimit = 90 persist
+  state memoryLimit = 90 persist
+  state diskLimit = 10 persist
+  // How long, in seconds, CPU or memory stays over its limit before an alert.
+  state sustain = 60 persist
+
+  // Recording a shortcut in Settings, and why a press made none.
+  state recording = false
+  state hotkeyNote = ""
+  mutation hotkeyChecked as shape GlobalShortcutCheck
+  derive hotkeyProblem = match hotkeyChecked { case some(c) => c.keys == hotkey ? checkProblem(c) : "", case none => "" }
+  // Held by the main window alone: a press goes to the session that reads the chord.
+  resource shortcut = globalShortcut(id="open", keys=hotkey) when isMain and hotkey != "" as shape GlobalShortcut else empty(id="open", keys="", registered=false)
+  resource notifying = notificationStatus() as shape NotificationStatus else empty(available=false, state="unknown", badge=false)
+  mutation permission as shape NotificationStatus
+
+  // The watch: a reading each pulse, for the menu bar, the alerts and the widget.
+  state pulse = 0
+  state diskPulse = 0
+  state diskAt = 0
+  // When CPU or memory went over its limit (performanceNow), 0 while under it.
+  state cpuSince = 0
+  state cpuAlerted = false
+  state memorySince = 0
+  state memoryAlerted = false
+  state diskAlerted = false
+  state widgetAt = 0
+  state widgetShown = ""
+  derive watching = isMain and (trayShow != "icon" or alertsOn or widgetOn)
+  // Every two seconds while the menu bar shows the load or Activity Monitor is open; five otherwise.
+  derive quick = trayShow != "icon" or (tab == "tasks" and shown)
+  resource vitals = vitals(pulse) when watching as shape Vitals else empty()
+  mutation widgetSaved as shape Saved refreshes widgetNow
+  // What the widget shows now, previewed in Settings: its own refresh, which reads the last
+  // reading the main window wrote.
+  resource widgetNow = widgetVitals(0) when top(nav).name == "settings" as shape WidgetEntry[] else empty()
+  derive widgetPreview = match widgetNow.at(0) { case some(w) => w.props, case none => VitalsWidgetProps(shows="all", cpu=0, memory=0, pressure="", free="", freeShare=0, updated="", ready=false) }
+  task watcher when watching and quick
+    every(2000, watch)
+  task idleWatcher when watching and not quick
+    every(5000, watch)
+  derive inWindow = page.name == "settings"
+  // The menu bar item's title and tooltip; with the load shown it is all AppKit draws.
+  derive trayLabel = trayShow == "icon" ? "Storage" : trayTitle(trayShow, vitals)
+  derive alertsNote = not alertsOn ? "Storage checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Storage are off. Turn them on in System Settings › Notifications › Storage." : `Storage tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.`
+  derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Storage from any app." : `Press ${chordText(hotkey)} in any app to open Storage.`
   derive groups = ["cache", "device"].filter(g => usage.slices.filter(s => s.group == g).length > 0)
   derive measuring = not current(usage)
   derive openedName = usage.slices.filter(s => s.id == opened).map(s => s.name).join("")
@@ -206,6 +344,103 @@ component Storage
 
   action quit
     close()
+  action follow(url: string)
+    nav = go(nav, url)
+  action closeSettings
+    nav = back(nav)
+  // The shortcut, from any app: the popover, as a click on the menu bar item opens it.
+  action hotkeyPressed(id: string, e: GlobalShortcutEvent)
+    togglePopover("stats", source="status-item")
+  // An alert's click opens the popover at what it is about.
+  action notified(tag: string, e: NotificationEvent)
+    tab = tag == "disk" ? "storage" : "tasks"
+    showPopover("stats", source="status-item")
+  action record
+    recording = true
+    hotkeyNote = ""
+    focus("hotkey")
+  action stopRecording
+    recording = false
+  action recordKey(k: string, e: KeyboardEvent)
+    if recording
+      preventDefault()
+      if k == "Escape" and not (e.metaKey or e.ctrlKey or e.altKey or e.shiftKey)
+        recording = false
+      else if not isModifier(k)
+        if e.metaKey or e.ctrlKey
+          let chord = chordOf(e)
+          hotkey = chord
+          recording = false
+          hotkeyNote = ""
+          send hotkeyChecked = checkGlobalShortcut(keys=chord)
+        else
+          hotkeyNote = "Use ⌘ or ⌃ with another key, such as ⌃⌥⌘S."
+  action clearHotkey
+    hotkey = ""
+    hotkeyNote = ""
+    recording = false
+  action setTrayShow(v: string)
+    trayShow = v
+  action setTrayIcon(icon: string)
+    trayIcon = icon
+  action setWidgetOn(on: bool)
+    widgetOn = on
+  action setWidgetShows(v: string)
+    widgetShows = v
+  action setAlertsOn(on: bool)
+    alertsOn = on
+    if on and notifying.state == "prompt"
+      send permission = requestNotificationPermission()
+  action setCpuLimit(v: string)
+    cpuLimit = number(v)
+  action setMemoryLimit(v: string)
+    memoryLimit = number(v)
+  action setDiskLimit(v: string)
+    diskLimit = number(v)
+  action setSustain(v: string)
+    sustain = number(v)
+  action testAlert
+    showNotification(title="Storage alerts are on", body="This is how Storage tells you when your Mac crosses a limit you set.", tag="test")
+  // Each pulse: the reading from the last one is checked against the limits, and the widget's
+  // reading is written each minute (and at once when what it shows changes).
+  action watch
+    pulse = pulse + 1
+    let now = performanceNow()
+    if now - diskAt >= 60000
+      diskPulse = diskPulse + 1
+      diskAt = now
+    if vitals.pressure != ""
+      if alertsOn and cpuLimit > 0 and vitals.cpu >= cpuLimit
+        if cpuSince == 0
+          cpuSince = now
+        else if not cpuAlerted and now - cpuSince >= sustain * 1000
+          cpuAlerted = true
+          showNotification(title="CPU usage is high", body=`Your Mac’s CPU has been over ${cpuLimit}% for ${sustainText(sustain)}, and is at ${round(vitals.cpu)}% now. Open Activity Monitor in Storage to see what’s using it.`, tag="cpu")
+      else
+        cpuSince = 0
+        if vitals.cpu < cpuLimit - 10 or not alertsOn
+          cpuAlerted = false
+      if alertsOn and memoryLimit > 0 and vitals.memory >= memoryLimit
+        if memorySince == 0
+          memorySince = now
+        else if not memoryAlerted and now - memorySince >= sustain * 1000
+          memoryAlerted = true
+          showNotification(title="Memory is running low", body=`${round(vitals.memory)}% of your Mac’s memory is in use, over your ${memoryLimit}% limit. Quitting apps you aren’t using frees it.`, tag="memory")
+      else
+        memorySince = 0
+        if vitals.memory < memoryLimit - 5 or not alertsOn
+          memoryAlerted = false
+    if disk.freeBytes > 0
+      if alertsOn and diskLimit > 0 and disk.freeBytes < diskLimit * 1000000000
+        if not diskAlerted
+          diskAlerted = true
+          showNotification(title="Your disk is almost full", body=`Only ${disk.free} is free. Open Storage to see what’s using the space and clear caches.`, tag="disk")
+      else if disk.freeBytes > diskLimit * 1200000000 or not alertsOn
+        diskAlerted = false
+    if widgetOn and vitals.pressure != "" and (widgetAt == 0 or now - widgetAt >= 60000 or widgetShown != widgetShows)
+      send widgetSaved = saveWidget(widgetShows, round(vitals.cpu), round(vitals.memory), vitals.pressure, disk.free, disk.size > 0 ? disk.freeBytes / disk.size : 0, clock.epochAtZero + now)
+      widgetAt = now
+      widgetShown = widgetShows
   action pick(t: string)
     tab = t
   action popover(e: ToggleEvent)
@@ -268,244 +503,342 @@ component Storage
         notice = ""
 
   view
-    main testId="root" width="100%" height="100%"
-      // The menu bar item on macOS; elsewhere an ordinary button.
-      button -exact-menu="status" popovertarget="stats" aria-label="Storage" testId="status-item"
-        image "symbol:sf/waveform.path.ecg"
-      column id="stats" popover="auto" toggle=popover width=360 height=600 display="flex" flex-direction="column" testId="stats"
-        // The segmented control: the platform's, between two boxes of one width so it stays centred.
-        row align-items="center" gap=4 padding-top=12 padding-left=12 padding-right=12 padding-bottom=8
-          column width=32
-          row flex=1 justify-content="center"
-            row role="tablist" appearance="none" aria-label="View" class=GlassTrack testId="tabs"
-              button role="tab" aria-controls="panel-tasks" aria-selected=(tab == "tasks") press=pick("tasks") class=(tab == "tasks" ? SegmentOn : Segment) testId="tab-tasks"
-                text "Activity Monitor" class=(tab == "tasks" ? LabelOn : Label)
-              button role="tab" aria-controls="panel-storage" aria-selected=(tab == "storage") press=pick("storage") class=(tab == "storage" ? SegmentOn : Segment) testId="tab-storage"
-                text "Storage" class=(tab == "storage" ? LabelOn : Label)
-          column width=32 align-items="flex-end"
-            if tab == "storage" and opened == ""
-              if measuring and usage.total != ""
-                progress aria-label="Measuring again" testId="remeasuring"
-              else
-                button press=rescan disabled=measuring aria-label="Measure Again" padding=6 border-radius=6 color="-exact-secondary-label" testId="rescan"
-                  image "symbol:refresh"
-        column role="tabpanel" id="panel-storage" aria-label="Storage" flex=1 min-height=0 display=(tab == "storage" ? "flex" : "none") flex-direction="column"
-          if opened == ""
-            scroll id="content" flex=1 min-height=0 scrollbar-width="none"
-              column gap=14 padding-left=12 padding-right=12 padding-bottom=8
-                if usage.error != ""
-                  text usage.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="error"
-                else if usage.total == "" and measuring
-                  column align-items="center" gap=12 padding-top=60 padding-bottom=60
-                    progress aria-label="Measuring"
-                    text "Measuring your folders…" color="-exact-secondary-label" testId="measuring"
-                else if usage.slices.length == 0
-                  text "None of the folders Storage measures has anything in it." color="-exact-secondary-label" text-align="center" padding-top=40 testId="empty"
-                else
-                  column align-items="center" gap=8
-                    column position="relative" width=190 height=190 testId="chart"
-                      svg width=190 height=190 viewBox="0 0 200 200" role="img" aria-label=`Storage by folder, ${usage.total} in all`
-                        for s in usage.slices key=s.id
-                          path d=s.path fill=sliceColor(s.id)
-                      for s in usage.slices key=s.id
-                        if s.labelled
-                          // A box centred on the label's point holds it.
-                          column position="absolute" left=`${s.labelX}%` top=`${s.labelY}%` width=44 height=16 margin-left=-22 margin-top=-8 align-items="center" justify-content="center" aria-hidden=true
-                            text s.percent font="-exact-caption2" font-weight=700 color="white" font-variant-numeric="tabular-nums"
-                      column position="absolute" inset=0 align-items="center" justify-content="center"
-                        text usage.total font="-exact-title2" font-weight=700 font-variant-numeric="tabular-nums" testId="total"
-                    if diskText != ""
-                      text diskText font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="disk"
-                      progress value=(usage.totalBytes / disk.size) aria-label="Share of the disk" width=200
-                  for g in groups key=g
-                    column gap=6
-                      text groupTitle(g) font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" padding-left=4
-                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12 padding-bottom=(g == "cache" ? 12 : 0) gap=(g == "cache" ? 8 : 0)
-                        column
-                          for s, i in usage.slices.filter(x => x.group == g) key=s.id
-                            // The folder's row opens what is in it.
-                            button press=openFolder(s.id) aria-label=`${s.name}, ${s.size}, ${s.percent}` display="flex" flex-direction="row" gap=10 align-items="center" padding-top=10 padding-bottom=10 border-top=(i == 0 ? "none" : "1px solid -exact-separator") testId=`slice-${s.id}`
-                              column width=12 height=12 border-radius=6 background-color=sliceColor(s.id) aria-hidden=true
-                              text s.name testId=`name-${s.id}`
-                              text s.percent color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`percent-${s.id}`
-                              column flex=1
-                              text s.size color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`size-${s.id}`
-                              image "symbol:forward-chevron" color="-exact-tertiary-label" aria-hidden=true
-                        if g == "cache"
-                          // Confirmed here, in the popover: an alert would close it.
-                          if confirming
-                            text `Move ${usage.cacheSize} of app caches and Xcode build data to the Trash? You can put them back from there until you empty it.` font="-exact-footnote" testId="confirm-text"
-                            row gap=8 justify-content="flex-end"
-                              button press=cancelClear padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" testId="cancel-clear"
-                                text "Cancel"
-                              button press=clear padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="confirm-clear"
-                                text "Move to Trash" color="white" font-weight=600
-                          else
-                            if notice != ""
-                              text notice font="-exact-footnote" color="-exact-secondary-label" testId="notice"
-                            button press=askClear disabled=pending(cleared) padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(pending(cleared) ? 0.6 : 1) testId="clear"
-                              text (pending(cleared) ? "Moving to Trash…" : `Clear Cache ${usage.cacheSize}`)
-                      if g == "cache"
-                        text "Cached files come back on their own: apps download or rebuild them when they need them." font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4
-          else
-            // One folder's contents, largest first.
-            row align-items="center" gap=6 padding-top=10 padding-left=8 padding-right=16 padding-bottom=6
-              button press=back aria-label="Back" padding=6 border-radius=6 testId="back"
-                image "symbol:back"
-              text openedName role="heading" aria-level=1 font="-exact-headline" flex=1 testId="folder-name"
-              if not listing
-                text contents.total color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="folder-total"
-            scroll id="folder" flex=1 min-height=0 scrollbar-width="none"
-              column padding-left=12 padding-right=12 padding-bottom=12
-                if listing
-                  column align-items="center" gap=12 padding-top=80 padding-bottom=80
-                    progress aria-label="Listing"
-                    text `Listing ${openedName}…` color="-exact-secondary-label" testId="listing"
-                else if contents.error != ""
-                  text contents.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="folder-error"
-                else if items.length == 0
-                  text "Nothing in this folder." color="-exact-secondary-label" text-align="center" padding-top=40 testId="folder-empty"
-                else
-                  column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=6
-                    for it, i in items key=it.path
-                      row gap=8 align-items="center" padding-top=8 padding-bottom=8 border-top=(i == 0 ? "none" : "1px solid -exact-separator") testId=`item-${i}`
-                        column flex=1 min-width=0 gap=1
-                          text shownName(names, i, it) text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`item-name-${i}`
-                          if shownDetail(names, i, it) != ""
-                            text shownDetail(names, i, it) font="-exact-caption1" color="-exact-secondary-label" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`item-detail-${i}`
-                        column align-items="flex-end" gap=1
-                          text it.size font-variant-numeric="tabular-nums" testId=`item-size-${i}`
-                          text it.percent font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`item-percent-${i}`
-                        button press=showInFinder(it.path) aria-label=`Show ${it.name} in Finder` padding=6 border-radius=6 color="-exact-secondary-label" testId=`item-reveal-${i}`
-                          image "symbol:search"
-        column role="tabpanel" id="panel-tasks" aria-label="Activity Monitor" flex=1 min-height=0 display=(tab == "tasks" ? "flex" : "none") flex-direction="column" testId="tasks"
-          if inspected == -1
-            column gap=10 padding-left=12 padding-right=12 padding-bottom=8
-              // The machine: CPU load as Activity Monitor graphs it, and memory with its pressure.
-              row gap=10
-                column flex=1 min-width=0 gap=6 padding=10 border-radius=12 background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" testId="cpu-card"
-                  row align-items="baseline" gap=4
-                    text "CPU" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
-                    if tasks.cpuIdle != ""
-                      text `${tasks.cpuIdle}% idle` font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="cpu-idle"
-                  column border-radius=6 overflow="hidden" background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.06))" align-items="center"
-                    svg width=140 height=44 viewBox="0 0 140 44" role="img" aria-label=`CPU load: ${tasks.cpuUser}% user, ${tasks.cpuSystem}% system` testId="cpu-graph"
-                      path d=tasks.systemPath fill="-exact-system-red"
-                      path d=tasks.userPath fill="-exact-system-blue"
-                  row gap=6 align-items="center"
-                    column width=8 height=8 border-radius=4 background-color="-exact-system-red" aria-hidden=true
-                    text "System" font="-exact-caption1" color="-exact-secondary-label" flex=1
-                    text `${tasks.cpuSystem}%` font="-exact-caption1" font-variant-numeric="tabular-nums" testId="cpu-system"
-                  row gap=6 align-items="center"
-                    column width=8 height=8 border-radius=4 background-color="-exact-system-blue" aria-hidden=true
-                    text "User" font="-exact-caption1" color="-exact-secondary-label" flex=1
-                    text `${tasks.cpuUser}%` font="-exact-caption1" font-variant-numeric="tabular-nums" testId="cpu-user"
-                column flex=1 min-width=0 gap=6 padding=10 border-radius=12 background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" testId="memory-card"
-                  row align-items="baseline" gap=4
-                    text "Memory" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
-                    if tasks.pressure != ""
-                      text tasks.pressure font="-exact-caption1" font-weight=600 color=pressureColor(tasks.pressure) testId="pressure"
-                  column gap=1
-                    text tasks.memoryUsed font="-exact-title3" font-weight=700 font-variant-numeric="tabular-nums" testId="memory-used"
-                    text (tasks.memoryTotal == "" ? " " : `used of ${tasks.memoryTotal}`) font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="memory-total"
-                  // The share used, in the colour of the pressure.
-                  column height=6 border-radius=3 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.1))" overflow="hidden" role="meter" aria-label="Memory used" aria-valuenow=round(tasks.memoryShare * 100) aria-valuemin=0 aria-valuemax=100
-                    column width=`${tasks.memoryShare * 100}%` height=6 background-color=pressureColor(tasks.pressure)
-                  row gap=6
-                    text "Cached" font="-exact-caption1" color="-exact-secondary-label" flex=1
-                    text tasks.cached font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-cached"
-                  row gap=6
-                    text "Swap" font="-exact-caption1" color="-exact-secondary-label" flex=1
-                    text tasks.swap font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-swap"
-              row gap=8 align-items="center"
-                input type="search" value=query input=search placeholder="Search" aria-label="Search Processes" flex=1 min-width=0 testId="search"
-                row role="radiogroup" appearance="none" aria-label="Sort by" class=GlassTrack testId="sort"
-                  for key in ["cpu", "memory", "name"] key=key
-                    button role="radio" aria-checked=(sort == key) press=order(key) class=(sort == key ? SegmentOn : Segment) testId=`sort-${key}`
-                      text sortLabel(key) class=(sort == key ? LabelOn : Label)
-              if endNotice != ""
-                text endNotice font="-exact-footnote" color="-exact-secondary-label" testId="end-notice"
-            scroll id="processes" flex=1 min-height=0 scrollbar-width="none"
-              column padding-left=12 padding-right=12 padding-bottom=8 gap=6
-                if tasks.error != ""
-                  text tasks.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="tasks-error"
-                else if reading
-                  column align-items="center" gap=12 padding-top=40 padding-bottom=40
-                    progress aria-label="Reading processes"
-                    text "Reading processes…" color="-exact-secondary-label" testId="reading"
-                else if tasks.processes.length == 0
-                  text `No process matches “${query.trim()}”.` color="-exact-secondary-label" text-align="center" padding-top=40 testId="no-match"
-                else
-                  column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
-                    // The columns, the sorted one in bold, as Activity Monitor marks it.
-                    row gap=8 padding-top=8 padding-bottom=6 aria-hidden=true
-                      text "Process" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "name" ? 700 : 400) flex=1
-                      text "% CPU" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "cpu" ? 700 : 400) width="3.5rem" text-align="right"
-                      text "Memory" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "memory" ? 700 : 400) width="5rem" text-align="right"
-                    for p, i in tasks.processes key=p.pid
-                      // A row opens the process's inspector.
-                      button press=openProcess(p.pid) aria-label=`${p.name}, process ${p.pid}, ${p.cpu} percent CPU, ${p.memory}` display="flex" flex-direction="row" gap=8 align-items="center" padding-top=6 padding-bottom=6 border-top="1px solid -exact-separator" testId=`proc-${i}`
-                        if p.icon != ""
-                          image p.icon width=20 height=20 flex-shrink=0 aria-hidden=true testId=`proc-icon-${i}`
-                        else
-                          column width=20 height=20 flex-shrink=0 align-items="center" justify-content="center" aria-hidden=true
-                            image "symbol:settings" font="-exact-title3" color="-exact-tertiary-label"
-                        column flex=1 min-width=0 gap=1 text-align="left"
-                          text p.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-name-${i}`
-                          text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-detail-${i}`
-                        text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right" testId=`proc-cpu-${i}`
-                        text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right" testId=`proc-memory-${i}`
-                  text countText(tasks.count, tasks.more) font="-exact-caption1" color="-exact-secondary-label" text-align="center" testId="count"
-          else
-            // One process, as Activity Monitor's inspector shows it.
-            row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
-              button press=closeProcess aria-label="Back" padding=6 border-radius=6 testId="proc-back"
-                image "symbol:back"
-              text (infoReady ? info.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="info-name"
-            scroll id="process" flex=1 min-height=0 scrollbar-width="none"
-              column gap=10 padding-left=12 padding-right=12 padding-bottom=12
-                if not infoReady
-                  column align-items="center" gap=12 padding-top=80 padding-bottom=80
-                    progress aria-label="Reading the process"
-                else if not info.found
-                  text "This process has quit." color="-exact-secondary-label" text-align="center" padding-top=40 testId="info-gone"
-                else
-                  column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
-                    Field(label="Process ID", value=`${info.pid}`, first=true, id="info-pid")
-                    Field(label="Parent", value=info.parent, first=false, id="info-parent")
-                    Field(label="User", value=info.user, first=false, id="info-user")
-                    Field(label="% CPU", value=info.cpu, first=false, id="info-cpu")
-                    Field(label="CPU Time", value=info.cpuTime, first=false, id="info-cpu-time")
-                    Field(label="Threads", value=info.threads, first=false, id="info-threads")
-                    Field(label="Memory", value=info.memory, first=false, id="info-memory")
-                    Field(label="Real Memory", value=info.realMemory, first=false, id="info-real-memory")
-                    if info.running != ""
-                      Field(label="Running For", value=info.running, first=false, id="info-running")
-                  if info.path != ""
-                    text info.path font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4 testId="info-path"
-                  if endNotice != ""
-                    text endNotice font="-exact-footnote" color="-exact-secondary-label" testId="info-notice"
-                  // Confirmed here, in the popover: an alert would close it.
-                  if ending != ""
-                    text (ending == "force" ? `Force quit “${info.name}”? It ends at once, and anything unsaved in it is lost.` : `Quit “${info.name}”?`) font="-exact-footnote" testId="end-confirm-text"
-                    row gap=8 justify-content="flex-end"
-                      button press=cancelEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="end-cancel"
-                        text "Cancel"
-                      button press=confirmEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="end-confirm"
-                        text (ending == "force" ? "Force Quit" : "Quit") color="white" font-weight=600
+    main testId="root" navigationKey=`${top(nav).id}` navigate=follow globalshortcut=hotkeyPressed notificationclick=notified width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0
+            // The menu bar item on macOS; elsewhere an ordinary button. With the load shown it
+            // has no image: AppKit draws the title, the label, in its place.
+            button id="status-item" -exact-menu="status" popovertarget="stats" aria-label=trayLabel testId="status-item"
+              if trayShow == "icon"
+                image trayIconSymbol(trayIcon)
+          column id="stats" popover="auto" toggle=popover width=360 height=600 display="flex" flex-direction="column" testId="stats"
+            // The segmented control: the platform's, between two boxes of one width so it stays centred.
+            row align-items="center" gap=4 padding-top=12 padding-left=12 padding-right=12 padding-bottom=8
+              column width=32
+              row flex=1 justify-content="center"
+                row role="tablist" appearance="none" aria-label="View" class=GlassTrack testId="tabs"
+                  button role="tab" aria-controls="panel-tasks" aria-selected=(tab == "tasks") press=pick("tasks") class=(tab == "tasks" ? SegmentOn : Segment) testId="tab-tasks"
+                    text "Activity Monitor" class=(tab == "tasks" ? LabelOn : Label)
+                  button role="tab" aria-controls="panel-storage" aria-selected=(tab == "storage") press=pick("storage") class=(tab == "storage" ? SegmentOn : Segment) testId="tab-storage"
+                    text "Storage" class=(tab == "storage" ? LabelOn : Label)
+              column width=32 align-items="flex-end"
+                if tab == "storage" and opened == ""
+                  if measuring and usage.total != ""
+                    progress aria-label="Measuring again" testId="remeasuring"
                   else
-                    row gap=8
-                      button press=askEnd("quit") disabled=(not info.mine or info.own or pending(ended)) flex=1 padding-top=7 padding-bottom=7 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(info.mine and not info.own ? 1 : 0.5) testId="end-quit"
-                        text "Quit"
-                      button press=askEnd("force") disabled=(not info.mine or info.own or pending(ended)) flex=1 padding-top=7 padding-bottom=7 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(info.mine and not info.own ? 1 : 0.5) testId="end-force"
-                        text "Force Quit"
-                    if info.own
-                      text "This is Storage. To quit it, use Quit Storage." font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
-                    else if not info.mine
-                      text `${info.name} belongs to ${info.user}. You can quit only your own processes.` font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
-        row padding-left=12 padding-right=12 padding-top=4 padding-bottom=10 justify-content="flex-end"
-          button press=quit aria-keyshortcuts="Meta+Q" padding=4 testId="quit"
-            text "Quit Storage" font="-exact-footnote" color="-exact-secondary-label"
+                    button press=rescan disabled=measuring aria-label="Measure Again" padding=6 border-radius=6 color="-exact-secondary-label" testId="rescan"
+                      image "symbol:refresh"
+            column role="region" id="panel-storage" aria-label="Storage" flex=1 min-height=0 display=(tab == "storage" ? "flex" : "none") flex-direction="column"
+              if opened == ""
+                scroll id="content" flex=1 min-height=0 scrollbar-width="none"
+                  column gap=14 padding-left=12 padding-right=12 padding-bottom=8
+                    if usage.error != ""
+                      text usage.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="error"
+                    else if usage.total == "" and measuring
+                      column align-items="center" gap=12 padding-top=60 padding-bottom=60
+                        progress aria-label="Measuring"
+                        text "Measuring your folders…" color="-exact-secondary-label" testId="measuring"
+                    else if usage.slices.length == 0
+                      text "None of the folders Storage measures has anything in it." color="-exact-secondary-label" text-align="center" padding-top=40 testId="empty"
+                    else
+                      column align-items="center" gap=8
+                        column position="relative" width=190 height=190 testId="chart"
+                          svg width=190 height=190 viewBox="0 0 200 200" role="img" aria-label=`Storage by folder, ${usage.total} in all`
+                            for s in usage.slices key=s.id
+                              path d=s.path fill=sliceColor(s.id)
+                          for s in usage.slices key=s.id
+                            if s.labelled
+                              // A box centred on the label's point holds it.
+                              column position="absolute" left=`${s.labelX}%` top=`${s.labelY}%` width=44 height=16 margin-left=-22 margin-top=-8 align-items="center" justify-content="center" aria-hidden=true
+                                text s.percent font="-exact-caption2" font-weight=700 color="white" font-variant-numeric="tabular-nums"
+                          column position="absolute" inset=0 align-items="center" justify-content="center"
+                            text usage.total font="-exact-title2" font-weight=700 font-variant-numeric="tabular-nums" testId="total"
+                        if diskText != ""
+                          text diskText font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="disk"
+                          progress value=(usage.totalBytes / disk.size) aria-label="Share of the disk" width=200
+                      for g in groups key=g
+                        column gap=6
+                          text groupTitle(g) font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" padding-left=4
+                          column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12 padding-bottom=(g == "cache" ? 12 : 0) gap=(g == "cache" ? 8 : 0)
+                            column
+                              for s, i in usage.slices.filter(x => x.group == g) key=s.id
+                                // The folder's row opens what is in it.
+                                button press=openFolder(s.id) aria-label=`${s.name}, ${s.size}, ${s.percent}` display="flex" flex-direction="row" gap=10 align-items="center" padding-top=10 padding-bottom=10 border-top=(i == 0 ? "none" : "1px solid -exact-separator") testId=`slice-${s.id}`
+                                  column width=12 height=12 border-radius=6 background-color=sliceColor(s.id) aria-hidden=true
+                                  text s.name testId=`name-${s.id}`
+                                  text s.percent color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`percent-${s.id}`
+                                  column flex=1
+                                  text s.size color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`size-${s.id}`
+                                  image "symbol:forward-chevron" color="-exact-tertiary-label" aria-hidden=true
+                            if g == "cache"
+                              // Confirmed here, in the popover: an alert would close it.
+                              if confirming
+                                text `Move ${usage.cacheSize} of app caches and Xcode build data to the Trash? You can put them back from there until you empty it.` font="-exact-footnote" testId="confirm-text"
+                                row gap=8 justify-content="flex-end"
+                                  button press=cancelClear padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" testId="cancel-clear"
+                                    text "Cancel"
+                                  button press=clear padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="confirm-clear"
+                                    text "Move to Trash" color="white" font-weight=600
+                              else
+                                if notice != ""
+                                  text notice font="-exact-footnote" color="-exact-secondary-label" testId="notice"
+                                button press=askClear disabled=pending(cleared) padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(pending(cleared) ? 0.6 : 1) testId="clear"
+                                  text (pending(cleared) ? "Moving to Trash…" : `Clear Cache ${usage.cacheSize}`)
+                          if g == "cache"
+                            text "Cached files come back on their own: apps download or rebuild them when they need them." font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4
+              else
+                // One folder's contents, largest first.
+                row align-items="center" gap=6 padding-top=10 padding-left=8 padding-right=16 padding-bottom=6
+                  button press=back aria-label="Back" padding=6 border-radius=6 testId="back"
+                    image "symbol:back"
+                  text openedName role="heading" aria-level=1 font="-exact-headline" flex=1 testId="folder-name"
+                  if not listing
+                    text contents.total color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="folder-total"
+                scroll id="folder" flex=1 min-height=0 scrollbar-width="none"
+                  column padding-left=12 padding-right=12 padding-bottom=12
+                    if listing
+                      column align-items="center" gap=12 padding-top=80 padding-bottom=80
+                        progress aria-label="Listing"
+                        text `Listing ${openedName}…` color="-exact-secondary-label" testId="listing"
+                    else if contents.error != ""
+                      text contents.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="folder-error"
+                    else if items.length == 0
+                      text "Nothing in this folder." color="-exact-secondary-label" text-align="center" padding-top=40 testId="folder-empty"
+                    else
+                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=6
+                        for it, i in items key=it.path
+                          row gap=8 align-items="center" padding-top=8 padding-bottom=8 border-top=(i == 0 ? "none" : "1px solid -exact-separator") testId=`item-${i}`
+                            column flex=1 min-width=0 gap=1
+                              text shownName(names, i, it) text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`item-name-${i}`
+                              if shownDetail(names, i, it) != ""
+                                text shownDetail(names, i, it) font="-exact-caption1" color="-exact-secondary-label" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`item-detail-${i}`
+                            column align-items="flex-end" gap=1
+                              text it.size font-variant-numeric="tabular-nums" testId=`item-size-${i}`
+                              text it.percent font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`item-percent-${i}`
+                            button press=showInFinder(it.path) aria-label=`Show ${it.name} in Finder` padding=6 border-radius=6 color="-exact-secondary-label" testId=`item-reveal-${i}`
+                              image "symbol:search"
+            column role="region" id="panel-tasks" aria-label="Activity Monitor" flex=1 min-height=0 display=(tab == "tasks" ? "flex" : "none") flex-direction="column" testId="tasks"
+              if inspected == -1
+                column gap=10 padding-left=12 padding-right=12 padding-bottom=8
+                  // The machine: CPU load as Activity Monitor graphs it, and memory with its pressure.
+                  row gap=10
+                    column flex=1 min-width=0 gap=6 padding=10 border-radius=12 background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" testId="cpu-card"
+                      row align-items="baseline" gap=4
+                        text "CPU" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
+                        if tasks.cpuIdle != ""
+                          text `${tasks.cpuIdle}% idle` font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="cpu-idle"
+                      column border-radius=6 overflow="hidden" background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.06))" align-items="center"
+                        svg width=140 height=44 viewBox="0 0 140 44" role="img" aria-label=`CPU load: ${tasks.cpuUser}% user, ${tasks.cpuSystem}% system` testId="cpu-graph"
+                          path d=tasks.systemPath fill="-exact-system-red"
+                          path d=tasks.userPath fill="-exact-system-blue"
+                      row gap=6 align-items="center"
+                        column width=8 height=8 border-radius=4 background-color="-exact-system-red" aria-hidden=true
+                        text "System" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                        text `${tasks.cpuSystem}%` font="-exact-caption1" font-variant-numeric="tabular-nums" testId="cpu-system"
+                      row gap=6 align-items="center"
+                        column width=8 height=8 border-radius=4 background-color="-exact-system-blue" aria-hidden=true
+                        text "User" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                        text `${tasks.cpuUser}%` font="-exact-caption1" font-variant-numeric="tabular-nums" testId="cpu-user"
+                    column flex=1 min-width=0 gap=6 padding=10 border-radius=12 background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" testId="memory-card"
+                      row align-items="baseline" gap=4
+                        text "Memory" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
+                        if tasks.pressure != ""
+                          text tasks.pressure font="-exact-caption1" font-weight=600 color=pressureColor(tasks.pressure) testId="pressure"
+                      column gap=1
+                        text tasks.memoryUsed font="-exact-title3" font-weight=700 font-variant-numeric="tabular-nums" testId="memory-used"
+                        text (tasks.memoryTotal == "" ? " " : `used of ${tasks.memoryTotal}`) font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="memory-total"
+                      // The share used, in the colour of the pressure.
+                      column height=6 border-radius=3 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.1))" overflow="hidden" role="meter" aria-label="Memory used" aria-valuenow=round(tasks.memoryShare * 100) aria-valuemin=0 aria-valuemax=100
+                        column width=`${tasks.memoryShare * 100}%` height=6 background-color=pressureColor(tasks.pressure)
+                      row gap=6
+                        text "Cached" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                        text tasks.cached font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-cached"
+                      row gap=6
+                        text "Swap" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                        text tasks.swap font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-swap"
+                  row gap=8 align-items="center"
+                    input type="search" value=query input=search placeholder="Search" aria-label="Search Processes" flex=1 min-width=0 testId="search"
+                    row role="radiogroup" appearance="none" aria-label="Sort by" class=GlassTrack testId="sort"
+                      for key in ["cpu", "memory", "name"] key=key
+                        button role="radio" aria-checked=(sort == key) press=order(key) class=(sort == key ? SegmentOn : Segment) testId=`sort-${key}`
+                          text sortLabel(key) class=(sort == key ? LabelOn : Label)
+                  if endNotice != ""
+                    text endNotice font="-exact-footnote" color="-exact-secondary-label" testId="end-notice"
+                scroll id="processes" flex=1 min-height=0 scrollbar-width="none"
+                  column padding-left=12 padding-right=12 padding-bottom=8 gap=6
+                    if tasks.error != ""
+                      text tasks.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="tasks-error"
+                    else if reading
+                      column align-items="center" gap=12 padding-top=40 padding-bottom=40
+                        progress aria-label="Reading processes"
+                        text "Reading processes…" color="-exact-secondary-label" testId="reading"
+                    else if tasks.processes.length == 0
+                      text `No process matches “${query.trim()}”.` color="-exact-secondary-label" text-align="center" padding-top=40 testId="no-match"
+                    else
+                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
+                        // The columns, the sorted one in bold, as Activity Monitor marks it.
+                        row gap=8 padding-top=8 padding-bottom=6 aria-hidden=true
+                          text "Process" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "name" ? 700 : 400) flex=1
+                          text "% CPU" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "cpu" ? 700 : 400) width="3.5rem" text-align="right"
+                          text "Memory" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "memory" ? 700 : 400) width="5rem" text-align="right"
+                        for p, i in tasks.processes key=p.pid
+                          // A row opens the process's inspector.
+                          button press=openProcess(p.pid) aria-label=`${p.name}, process ${p.pid}, ${p.cpu} percent CPU, ${p.memory}` display="flex" flex-direction="row" gap=8 align-items="center" padding-top=6 padding-bottom=6 border-top="1px solid -exact-separator" testId=`proc-${i}`
+                            if p.icon != ""
+                              image p.icon width=20 height=20 flex-shrink=0 aria-hidden=true testId=`proc-icon-${i}`
+                            else
+                              column width=20 height=20 flex-shrink=0 align-items="center" justify-content="center" aria-hidden=true
+                                image "symbol:settings" font="-exact-title3" color="-exact-tertiary-label"
+                            column flex=1 min-width=0 gap=1 text-align="left"
+                              text p.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-name-${i}`
+                              text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-detail-${i}`
+                            text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right" testId=`proc-cpu-${i}`
+                            text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right" testId=`proc-memory-${i}`
+                      text countText(tasks.count, tasks.more) font="-exact-caption1" color="-exact-secondary-label" text-align="center" testId="count"
+              else
+                // One process, as Activity Monitor's inspector shows it.
+                row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
+                  button press=closeProcess aria-label="Back" padding=6 border-radius=6 testId="proc-back"
+                    image "symbol:back"
+                  text (infoReady ? info.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="info-name"
+                scroll id="process" flex=1 min-height=0 scrollbar-width="none"
+                  column gap=10 padding-left=12 padding-right=12 padding-bottom=12
+                    if not infoReady
+                      column align-items="center" gap=12 padding-top=80 padding-bottom=80
+                        progress aria-label="Reading the process"
+                    else if not info.found
+                      text "This process has quit." color="-exact-secondary-label" text-align="center" padding-top=40 testId="info-gone"
+                    else
+                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
+                        Field(label="Process ID", value=`${info.pid}`, first=true, id="info-pid")
+                        Field(label="Parent", value=info.parent, first=false, id="info-parent")
+                        Field(label="User", value=info.user, first=false, id="info-user")
+                        Field(label="% CPU", value=info.cpu, first=false, id="info-cpu")
+                        Field(label="CPU Time", value=info.cpuTime, first=false, id="info-cpu-time")
+                        Field(label="Threads", value=info.threads, first=false, id="info-threads")
+                        Field(label="Memory", value=info.memory, first=false, id="info-memory")
+                        Field(label="Real Memory", value=info.realMemory, first=false, id="info-real-memory")
+                        if info.running != ""
+                          Field(label="Running For", value=info.running, first=false, id="info-running")
+                      if info.path != ""
+                        text info.path font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4 testId="info-path"
+                      if endNotice != ""
+                        text endNotice font="-exact-footnote" color="-exact-secondary-label" testId="info-notice"
+                      // Confirmed here, in the popover: an alert would close it.
+                      if ending != ""
+                        text (ending == "force" ? `Force quit “${info.name}”? It ends at once, and anything unsaved in it is lost.` : `Quit “${info.name}”?`) font="-exact-footnote" testId="end-confirm-text"
+                        row gap=8 justify-content="flex-end"
+                          button press=cancelEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="end-cancel"
+                            text "Cancel"
+                          button press=confirmEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="end-confirm"
+                            text (ending == "force" ? "Force Quit" : "Quit") color="white" font-weight=600
+                      else
+                        row gap=8
+                          button press=askEnd("quit") disabled=(not info.mine or info.own or pending(ended)) flex=1 padding-top=7 padding-bottom=7 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(info.mine and not info.own ? 1 : 0.5) testId="end-quit"
+                            text "Quit"
+                          button press=askEnd("force") disabled=(not info.mine or info.own or pending(ended)) flex=1 padding-top=7 padding-bottom=7 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(info.mine and not info.own ? 1 : 0.5) testId="end-force"
+                            text "Force Quit"
+                        if info.own
+                          text "This is Storage. To quit it, use Quit Storage." font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
+                        else if not info.mine
+                          text `${info.name} belongs to ${info.user}. You can quit only your own processes.` font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
+            // Settings (⌘,: the Mac's Settings window) and Quit.
+            row padding-left=8 padding-right=12 padding-top=4 padding-bottom=10 align-items="center"
+              link href="/settings" target="settings" aria-keyshortcuts="Meta+," aria-label="Settings" padding=4 border-radius=6 color="-exact-secondary-label" testId="open-settings"
+                image "symbol:settings"
+              column flex=1
+              button press=quit aria-keyshortcuts="Meta+Q" padding=4 testId="quit"
+                text "Quit Storage" font="-exact-footnote" color="-exact-secondary-label"
+        if e.name == "settings"
+          column navigationKey=`${e.id}` navigationScroll="settings-form" position="absolute" inset=0 display="flex" flex-direction="column" testId="settings"
+            header display="flex" align-items="center"
+              text "Settings" role="heading" aria-level=1 flex=1
+              // In a window of its own on the Mac; elsewhere Settings is a screen over the app.
+              if not inWindow
+                button press=closeSettings testId="settings-done"
+                  text "Done"
+            list id="settings-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+              section
+                header
+                  text "Keyboard Shortcut"
+                row
+                  text "Open Storage"
+                  row gap=6 align-items="center"
+                    button id="hotkey" tabindex=0 buttonStyle="bordered" press=record key=recordKey blur=stopRecording aria-label=(hotkey == "" ? "Record Shortcut" : `Shortcut ${chordText(hotkey)}. Record another`) testId="hotkey"
+                      text (recording ? "Type Shortcut…" : hotkey == "" ? "Record Shortcut" : chordText(hotkey))
+                    if hotkey != "" and not recording
+                      button press=clearHotkey aria-label="Clear Shortcut" testId="hotkey-clear"
+                        image "symbol:close"
+                footer
+                  text hotkeyFooter testId="hotkey-note"
+              section
+                header
+                  text "Menu Bar"
+                row
+                  text "Show"
+                  select value=trayShow change=setTrayShow aria-label="Menu bar item shows" testId="tray-show"
+                    option "Icon" value="icon"
+                    option "CPU Usage" value="cpu"
+                    option "CPU and Memory" value="both"
+                if trayShow == "icon"
+                  row
+                    text "Icon"
+                    row role="radiogroup" aria-label="Menu bar icon" testId="tray-icon"
+                      for icon in ["waveform", "gauge", "cpu", "memory", "disk", "chart"] key=icon
+                        button role="radio" aria-checked=(trayIcon == icon) press=setTrayIcon(icon) aria-label=trayIconName(icon) testId=`tray-icon-${icon}`
+                          image trayIconSymbol(icon)
+                footer
+                  text (trayShow == "icon" ? "The icon Storage shows in the menu bar." : "The menu bar shows your Mac’s load, read every two seconds.") testId="tray-note"
+              section
+                header
+                  text "Desktop Widget"
+                row
+                  text "Keep Widget Up to Date"
+                  input type="checkbox" switch checked=widgetOn change=setWidgetOn aria-label="Keep Widget Up to Date" testId="widget-on"
+                row
+                  text "Shows"
+                  select value=widgetShows change=setWidgetShows disabled=(not widgetOn) aria-label="Widget shows" testId="widget-shows"
+                    option "CPU, Memory and Disk" value="all"
+                    option "CPU and Memory" value="system"
+                    option "Disk Space" value="disk"
+                row justify-content="center"
+                  // The widget as the desktop shows it, at the small size.
+                  column width=158 height=158 padding=14 border-radius=22 background-color="-exact-secondary-background" aria-label="Widget preview" testId="widget-preview"
+                    VitalsWidget(shows=widgetPreview.shows, cpu=widgetPreview.cpu, memory=widgetPreview.memory, pressure=widgetPreview.pressure, free=widgetPreview.free, freeShare=widgetPreview.freeShare, updated=widgetPreview.updated, ready=widgetPreview.ready)
+                footer
+                  text "To add the widget, Control-click the desktop, choose Edit Widgets, then find Storage. Storage updates it each minute while it runs." testId="widget-note"
+              section
+                header
+                  text "Alerts"
+                row
+                  text "Notify Me"
+                  input type="checkbox" switch checked=alertsOn change=setAlertsOn aria-label="Notify Me" testId="alerts-on"
+                row
+                  text "CPU Over"
+                  select value=`${cpuLimit}` change=setCpuLimit disabled=(not alertsOn) aria-label="CPU over" testId="cpu-limit"
+                    for n in [0, 50, 70, 80, 90, 95] key=n
+                      option limitText(n) value=`${n}`
+                row
+                  text "Memory Over"
+                  select value=`${memoryLimit}` change=setMemoryLimit disabled=(not alertsOn) aria-label="Memory over" testId="memory-limit"
+                    for n in [0, 70, 80, 90, 95] key=n
+                      option limitText(n) value=`${n}`
+                row
+                  text "Free Disk Under"
+                  select value=`${diskLimit}` change=setDiskLimit disabled=(not alertsOn) aria-label="Free disk space under" testId="disk-limit"
+                    for n in [0, 5, 10, 20, 50] key=n
+                      option diskLimitText(n) value=`${n}`
+                row
+                  text "For at Least"
+                  select value=`${sustain}` change=setSustain disabled=(not alertsOn) aria-label="For at least" testId="sustain"
+                    for n in [10, 30, 60, 300] key=n
+                      option sustainText(n) value=`${n}`
+                row
+                  button press=testAlert disabled=(not alertsOn or notifying.state == "denied") testId="test-alert"
+                    text "Send Test Notification"
+                footer
+                  text alertsNote testId="alerts-note"
 
 // A label and its value, a row of the process inspector.
 component Field
@@ -518,3 +851,44 @@ component Field
     row gap=12 align-items="baseline" padding-top=7 padding-bottom=7 border-top=(first ? "none" : "1px solid -exact-separator")
       text label color="-exact-secondary-label"
       text value flex=1 min-width=0 text-align="right" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=id
+
+// The desktop widget (app.json's `widgets`): the main window's last reading of the machine.
+component VitalsWidget
+  props
+    shows: string
+    cpu: number
+    memory: number
+    pressure: string
+    free: string
+    freeShare: number
+    updated: string
+    ready: bool
+  view
+    column gap=8 flex=1 justify-content="center" testId="widget"
+      if not ready
+        image "symbol:activity" width=28 height=28 color="-exact-secondary-label" aria-hidden=true
+        text "Open Storage to see your Mac’s load here." font="-exact-footnote" color="-exact-secondary-label" testId="widget-empty"
+      else
+        if shows != "disk"
+          Meter(label="CPU", value=`${round(cpu)}%`, share=cpu / 100, tint="blue", id="widget-cpu")
+          Meter(label="Memory", value=`${round(memory)}%`, share=memory / 100, tint=(pressure == "Critical" ? "red" : pressure == "Warning" ? "yellow" : "green"), id="widget-memory")
+        if shows != "system" and free != ""
+          Meter(label="Disk", value=`${free} free`, share=1 - freeShare, tint="purple", id="widget-disk")
+        text updated font="-exact-caption2" color="-exact-tertiary-label" testId="widget-updated"
+
+// A labelled share and its bar, a row of the widget.
+component Meter
+  props
+    label: string
+    value: string
+    share: number
+    // "blue", "green", "yellow", "red" or "purple": the system colour of that name.
+    tint: string
+    id: string
+  view
+    column gap=3
+      row gap=6 align-items="baseline"
+        text label font="-exact-caption1" font-weight=600 color="-exact-secondary-label" flex=1
+        text value font="-exact-caption1" font-variant-numeric="tabular-nums" testId=id
+      column height=5 border-radius=3 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" overflow="hidden" aria-hidden=true
+        column width=`${max(0, min(1, share)) * 100}%` height=5 background-color=(tint == "red" ? "-exact-system-red" : tint == "yellow" ? "-exact-system-yellow" : tint == "green" ? "-exact-system-green" : tint == "purple" ? "-exact-system-purple" : "-exact-system-blue")

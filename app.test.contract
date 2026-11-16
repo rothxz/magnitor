@@ -1,0 +1,237 @@
+// Run on macOS with a fixture home and scripted programs, so no real folder is measured,
+// nothing is moved to the Trash and Finder is not opened:
+//   bun exact.mjs agent macos --test app.test.contract --home tools/home \
+//     --process /bin/df=script:tools/df.json --process /usr/bin/trash=script:tools/trash.json \
+//     --process /usr/bin/mdfind=script:tools/mdfind.json --process /usr/bin/mdls=script:tools/mdls.json \
+//     --process /usr/bin/open=script:tools/open.json
+// The Rust source walks tools/home itself (the driver's `--home`). Its files are whole 4 KiB
+// blocks, so each takes on disk what it holds:
+//   Library/Caches: com.alpha/ 48 KiB, CocoaPods/ 24 KiB, loose.bin 8 KiB
+//   Library/Developer/Xcode/DerivedData: Rycap-…/ 120 KiB, info.bin 40 KiB
+//   Documents 320 KiB, Downloads 240 KiB, Desktop 4 KiB, Movies empty, no Pictures or Music
+// tools/df.json reports a disk of 1e9 KiB with 5e8 KiB free; Spotlight's scripts name
+// com.alpha "Alpha".
+// A menu bar app shows no window: each test opens the stats popover from the status item
+// first, as a person does, once the menu bar has laid the item out (a moment after launch,
+// on real time): the popover points at it.
+
+test "each folder's size and share of the total"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  expect tree has "stats"
+  expect text "total" == "823 KB"
+  expect text "name-caches" == "App caches"
+  expect text "size-caches" == "82 KB"
+  expect text "percent-caches" == "10%"
+  expect text "size-derived" == "164 KB"
+  expect text "percent-derived" == "19.9%"
+  expect text "size-documents" == "328 KB"
+  expect text "percent-documents" == "39.8%"
+  expect text "percent-downloads" == "29.9%"
+  expect text "size-desktop" == "4 KB"
+  expect text "percent-desktop" == "0.5%"
+  expect tree missing "slice-movies"
+  expect tree missing "slice-pictures"
+  expect tree missing "slice-music"
+  expect text "disk" == "These folders use <0.1% of your disk. 512 GB is free."
+  expect text "clear" == "Clear Cache 246 KB"
+  expect text "quit" == "Quit Storage"
+
+test "Clear Cache asks first, and Cancel moves nothing"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  tap "clear"
+  expect text "confirm-text" == "Move 246 KB of app caches and Xcode build data to the Trash? You can put them back from there until you empty it."
+  expect tree missing "clear"
+  tap "cancel-clear"
+  expect tree missing "confirm-text"
+  expect tree has "clear"
+  expect state notice == ""
+  expect state cleared == none
+
+test "Move to Trash moves each cache folder's contents, says so, and measures again"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  tap "clear"
+  tap "confirm-clear"
+  clock data
+  expect text "notice" == "Moved 5 items to the Trash."
+  expect state generation == 1
+  expect text "total" == "823 KB"
+  expect tree has "stats"
+
+test "Measure Again asks the folders again"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  tap "rescan"
+  clock data
+  expect state generation == 1
+  expect text "total" == "823 KB"
+  expect no failures
+
+test "App caches opens each app's cache, by the app's name, largest first"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  tap "slice-caches"
+  clock data
+  expect text "folder-name" == "App caches"
+  expect text "folder-total" == "82 KB"
+  expect text "item-name-0" == "Alpha"
+  expect text "item-detail-0" == "com.alpha"
+  expect text "item-size-0" == "49 KB"
+  expect text "item-percent-0" == "60%"
+  expect text "item-name-1" == "CocoaPods"
+  expect tree missing "item-detail-1"
+  expect text "item-size-1" == "25 KB"
+  expect text "item-percent-1" == "30%"
+  expect text "item-name-2" == "Other files"
+  expect text "item-size-2" == "8 KB"
+  expect text "item-percent-2" == "10%"
+  tap "item-reveal-0"
+  clock data
+  expect no failures
+  tap "back"
+  expect text "total" == "823 KB"
+  expect tree missing "folder-name"
+
+test "Xcode build data opens each project's build folder"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  tap "slice-derived"
+  clock data
+  expect text "folder-name" == "Xcode build data"
+  expect text "folder-total" == "164 KB"
+  expect text "item-name-0" == "Rycap"
+  expect text "item-detail-0" == "Xcode project"
+  expect text "item-size-0" == "123 KB"
+  expect text "item-percent-0" == "75%"
+  expect text "item-name-1" == "Other files"
+  expect text "item-size-1" == "41 KB"
+  expect text "item-percent-1" == "25%"
+
+test "a folder on this Mac opens too"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  tap "slice-desktop"
+  clock data
+  expect text "folder-name" == "Desktop"
+  expect text "item-name-0" == "Other files"
+  expect text "item-size-0" == "4 KB"
+  expect text "item-percent-0" == "100%"
+
+// Activity Monitor reads this Mac's real processes, so these tests name only what every Mac
+// runs: Storage itself, Finder (this user's) and launchd (root's, pid 1). Nothing is quit:
+// each Quit is cancelled.
+
+test "Activity Monitor is the first tab, and the control switches to Storage and back"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  expect state tab == "tasks"
+  clock data
+  expect state tasks.count >= 10
+  expect state tasks.error == ""
+  expect tree has "cpu-graph"
+  expect tree has "memory-used"
+  expect tree has "proc-0"
+  tap "tab-storage"
+  expect state tab == "storage"
+  expect text "total" == "823 KB"
+  tap "tab-tasks"
+  expect state tab == "tasks"
+
+test "Activity Monitor reads again while it is open"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  clock +2100 real
+  clock data
+  expect state tick >= 1
+  expect state tasks.error == ""
+
+test "a search finds Storage itself, which quits only from Quit Storage"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  type "search" "Storage"
+  clock data
+  expect text "proc-name-0" == "Storage"
+  tap "proc-0"
+  clock data
+  expect text "info-name" == "Storage"
+  expect text "end-why" == "This is Storage. To quit it, use Quit Storage."
+  tap "proc-back"
+  expect state inspected == -1
+  expect tree has "search"
+
+test "another user's process can be inspected, not quit"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  type "search" "launchd"
+  clock data
+  expect text "proc-name-0" == "launchd"
+  expect text "proc-detail-0" == "1 · root"
+  tap "proc-0"
+  clock data
+  expect text "info-pid" == "1"
+  expect text "info-user" == "root"
+  expect text "end-why" == "launchd belongs to root. You can quit only your own processes."
+
+test "Quit and Force Quit ask first, and Cancel ends nothing"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  type "search" "Finder"
+  clock data
+  expect text "proc-name-0" == "Finder"
+  tap "proc-0"
+  clock data
+  expect tree missing "end-why"
+  tap "end-quit"
+  expect text "end-confirm-text" == "Quit “Finder”?"
+  tap "end-cancel"
+  expect tree missing "end-confirm-text"
+  tap "end-force"
+  expect text "end-confirm-text" == "Force quit “Finder”? It ends at once, and anything unsaved in it is lost."
+  tap "end-cancel"
+  expect state ended == none
+  expect state ending == ""
+
+test "sorting and a search that matches nothing"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  tap "sort-memory"
+  clock data
+  expect state sort == "memory"
+  tap "sort-name"
+  clock data
+  expect state sort == "name"
+  type "search" "no-such-process-here"
+  clock data
+  expect text "no-match" == "No process matches “no-such-process-here”."

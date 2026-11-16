@@ -1,0 +1,512 @@
+// Storage: the view. Two tabs under a segmented control: Activity Monitor (processes, CPU
+// and memory, after the Mac's own) and Storage. The Rust crate in data/ measures the folders and lists what is
+// in each, walking them on many threads, and reads the processes, CPU and memory; app.ts
+// answers the disk's size, the apps' names, Clear Cache and Show in Finder. On macOS the app lives in the menu bar (app.json's
+// `accessory`) and shows no window: the status item opens the `stats` popover,
+// AppKit's NSPopover pointing at the item, with the system's material (Liquid
+// Glass on macOS 26 and later). A folder's row opens its contents in the popover.
+shape Slice
+  id: string
+  name: string
+  group: string
+  bytes: number
+  size: string
+  percent: string
+  path: string
+  labelX: number
+  labelY: number
+  labelled: bool
+
+shape Usage
+  total: string
+  totalBytes: number
+  slices: Slice[]
+  cacheBytes: number
+  cacheSize: string
+  error: string
+
+shape Disk
+  size: number
+  free: string
+
+shape AppName
+  id: string
+  name: string
+
+shape Item
+  path: string
+  name: string
+  detail: string
+  folder: string
+  bytes: number
+  size: string
+  percent: string
+
+shape Contents
+  id: string
+  total: string
+  items: Item[]
+  error: string
+
+shape Cleared
+  ok: bool
+  message: string
+
+shape Revealed
+  ok: bool
+
+shape Proc
+  pid: number
+  name: string
+  detail: string
+  cpu: string
+  memory: string
+  mine: bool
+
+shape Tasks
+  cpuUser: string
+  cpuSystem: string
+  cpuIdle: string
+  userPath: string
+  systemPath: string
+  memoryUsed: string
+  memoryTotal: string
+  memoryShare: number
+  pressure: string
+  cached: string
+  swap: string
+  count: number
+  processes: Proc[]
+  more: number
+  error: string
+
+// One process, as Activity Monitor's inspector shows it.
+shape ProcInfo
+  pid: number
+  found: bool
+  name: string
+  path: string
+  user: string
+  parent: string
+  cpu: string
+  cpuTime: string
+  threads: string
+  memory: string
+  realMemory: string
+  running: string
+  mine: bool
+  own: bool
+
+shape Ended
+  ok: bool
+  message: string
+
+fn sliceColor(id: string): string = id == "caches" ? "-exact-system-orange" : id == "derived" ? "-exact-system-red" : id == "documents" ? "-exact-system-blue" : id == "downloads" ? "-exact-system-teal" : id == "desktop" ? "-exact-system-indigo" : id == "pictures" ? "-exact-system-green" : id == "movies" ? "-exact-system-purple" : "-exact-system-yellow"
+
+// A share as Finder words it: 9.3%, <0.1%.
+fn percentText(share: number): string = share > 0 and share < 0.001 ? "<0.1%" : `${round(share * 1000) / 10}%`
+
+// An item by the name of the app that keeps it, when `names` (one per item, in order, from
+// app.ts) has one for its folder; the folder's own name otherwise. A lookup by position: a
+// search of every app for every item would pass the view's list-step limit on a full cache.
+fn shownName(names: AppName[], i: number, it: Item): string = match names.at(i) { case some(a) => a.id == it.folder and a.name != "" ? a.name : it.name, case none => it.name }
+// Under an app's name, its folder (the bundle id).
+fn shownDetail(names: AppName[], i: number, it: Item): string = match names.at(i) { case some(a) => a.id == it.folder and a.name != "" ? it.folder : it.detail, case none => it.detail }
+
+fn groupTitle(group: string): string = group == "cache" ? "Cache" : "On this Mac"
+
+fn sortLabel(key: string): string = key == "cpu" ? "CPU" : key == "memory" ? "Memory" : "Name"
+
+// Activity Monitor's memory pressure colours.
+fn pressureColor(p: string): string = p == "Critical" ? "-exact-system-red" : p == "Warning" ? "-exact-system-yellow" : "-exact-system-green"
+
+fn processes(n: number): string = `${n} ${n == 1 ? "process" : "processes"}`
+fn countText(n: number, more: number): string = more > 0 ? `${processes(n)} · ${more} more match: search to find one` : processes(n)
+
+// The segmented controls in Liquid Glass (NSGlassEffectView on macOS 26 and later): a glass
+// capsule, and on it a brighter glass pill under the chosen segment. They keep their tab and
+// radio roles, so the arrow keys and VoiceOver work as on AppKit's own control.
+style GlassTrack
+  backgroundMaterial = "glass"
+  border-radius = 999
+  padding = 3
+  gap = 2
+  align-items = "center"
+
+style Segment
+  backgroundMaterial = "none"
+  -exact-glass-tint = "transparent"
+  border-radius = 999
+  padding-top = 4
+  padding-bottom = 4
+  padding-left = 12
+  padding-right = 12
+
+style SegmentOn
+  backgroundMaterial = "glass"
+  -exact-glass-tint = "light-dark(rgba(255,255,255,0.55), rgba(255,255,255,0.16))"
+  border-radius = 999
+  padding-top = 4
+  padding-bottom = 4
+  padding-left = 12
+  padding-right = 12
+
+style Label
+  color = "-exact-secondary-label"
+  font-weight = 500
+
+style LabelOn
+  color = "-exact-label"
+  font-weight = 600
+
+component Storage
+  // The tab the popover shows: "tasks" (Activity Monitor, the first) or "storage".
+  state tab = "tasks"
+  // Whether the popover is open: Activity Monitor reads the machine only while it is seen.
+  state shown = false
+  state generation = 0
+  state confirming = false
+  state notice = ""
+  // The folder whose contents the popover shows; "" for the overview.
+  state opened = ""
+  resource usage = usage(generation) as shape Usage else empty()
+  resource contents = contents(opened, generation) when opened != "" as shape Contents else empty()
+  resource disk = disk(generation) as shape Disk else empty()
+  // Asked with no folders at launch, which loads Spotlight's list ahead of App caches.
+  resource names = appNamesFor(cacheFolders) as shape AppName[] else empty()
+  mutation cleared as shape Cleared then afterClear
+  mutation revealed as shape Revealed
+  // Activity Monitor: a reading each tick, sorted and searched in Rust.
+  state tick = 0
+  state sort = "cpu"
+  state query = ""
+  // The process the inspector shows; -1 for the list (0 is the kernel).
+  state inspected = -1
+  // "quit" or "force" while Quit or Force Quit waits to be confirmed.
+  state ending = ""
+  state endNotice = ""
+  resource tasks = tasks(tick, sort, query) when tab == "tasks" as shape Tasks else empty()
+  resource info = process(inspected, tick) when tab == "tasks" and inspected != -1 as shape ProcInfo else empty()
+  mutation ended as shape Ended then afterEnd
+  task sampler when tab == "tasks" and shown
+    every(2000, sample)
+  derive groups = ["cache", "device"].filter(g => usage.slices.filter(s => s.group == g).length > 0)
+  derive measuring = not current(usage)
+  derive openedName = usage.slices.filter(s => s.id == opened).map(s => s.name).join("")
+  // The list of the folder that is open, never one left from the folder before.
+  derive items = contents.id == opened ? contents.items : []
+  derive cacheFolders = opened == "caches" ? items.map(it => it.folder) : []
+  derive diskText = disk.size > 0 and usage.total != "" ? `These folders use ${percentText(usage.totalBytes / disk.size)} of your disk. ${disk.free} is free.` : ""
+  derive listing = opened != "" and (not current(contents) or contents.id != opened)
+  derive reading = tasks.count == 0 and tasks.error == ""
+  derive infoReady = info.pid == inspected and current(info)
+
+  action quit
+    close()
+  action pick(t: string)
+    tab = t
+  action popover(e: ToggleEvent)
+    shown = e.newState == "open"
+  action sample
+    tick = tick + 1
+  action search(v: string)
+    query = v
+    endNotice = ""
+  action order(key: string)
+    sort = key
+  action openProcess(pid: number)
+    inspected = pid
+    ending = ""
+    endNotice = ""
+  action closeProcess
+    inspected = -1
+    ending = ""
+  action askEnd(how: string)
+    ending = how
+    endNotice = ""
+  action cancelEnd
+    ending = ""
+  action confirmEnd
+    send ended = endProcess(inspected, ending == "force")
+    ending = ""
+  action afterEnd
+    match ended
+      case some(r)
+        endNotice = r.message
+        if r.ok
+          inspected = -1
+          tick = tick + 1
+      case none
+        endNotice = ""
+  action rescan
+    generation = generation + 1
+  action openFolder(id: string)
+    opened = id
+    confirming = false
+  action back
+    opened = ""
+  action showInFinder(path: string)
+    send revealed = reveal(path)
+  action askClear
+    confirming = true
+    notice = ""
+  action cancelClear
+    confirming = false
+  action clear
+    confirming = false
+    send cleared = clearCache()
+  action afterClear
+    match cleared
+      case some(r)
+        notice = r.message
+        // Measured afresh: the Rust source keeps each generation's walk.
+        generation = generation + 1
+      case none
+        notice = ""
+
+  view
+    main testId="root" width="100%" height="100%"
+      // The menu bar item on macOS; elsewhere an ordinary button.
+      button -exact-menu="status" popovertarget="stats" aria-label="Storage" testId="status-item"
+        image "symbol:sf/internaldrive"
+      column id="stats" popover="auto" toggle=popover width=360 height=600 display="flex" flex-direction="column" testId="stats"
+        // The segmented control: the platform's, between two boxes of one width so it stays centred.
+        row align-items="center" gap=4 padding-top=12 padding-left=12 padding-right=12 padding-bottom=8
+          column width=32
+          row flex=1 justify-content="center"
+            row role="tablist" appearance="none" aria-label="View" class=GlassTrack testId="tabs"
+              button role="tab" aria-controls="panel-tasks" aria-selected=(tab == "tasks") press=pick("tasks") class=(tab == "tasks" ? SegmentOn : Segment) testId="tab-tasks"
+                text "Activity Monitor" class=(tab == "tasks" ? LabelOn : Label)
+              button role="tab" aria-controls="panel-storage" aria-selected=(tab == "storage") press=pick("storage") class=(tab == "storage" ? SegmentOn : Segment) testId="tab-storage"
+                text "Storage" class=(tab == "storage" ? LabelOn : Label)
+          column width=32 align-items="flex-end"
+            if tab == "storage" and opened == ""
+              if measuring and usage.total != ""
+                progress aria-label="Measuring again" testId="remeasuring"
+              else
+                button press=rescan disabled=measuring aria-label="Measure Again" padding=6 border-radius=6 color="-exact-secondary-label" testId="rescan"
+                  image "symbol:refresh"
+        column role="tabpanel" id="panel-storage" aria-label="Storage" flex=1 min-height=0 display=(tab == "storage" ? "flex" : "none") flex-direction="column"
+          if opened == ""
+            scroll id="content" flex=1 min-height=0 scrollbar-width="none"
+              column gap=14 padding-left=12 padding-right=12 padding-bottom=8
+                if usage.error != ""
+                  text usage.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="error"
+                else if usage.total == "" and measuring
+                  column align-items="center" gap=12 padding-top=60 padding-bottom=60
+                    progress aria-label="Measuring"
+                    text "Measuring your folders…" color="-exact-secondary-label" testId="measuring"
+                else if usage.slices.length == 0
+                  text "None of the folders Storage measures has anything in it." color="-exact-secondary-label" text-align="center" padding-top=40 testId="empty"
+                else
+                  column align-items="center" gap=8
+                    column position="relative" width=190 height=190 testId="chart"
+                      svg width=190 height=190 viewBox="0 0 200 200" role="img" aria-label=`Storage by folder, ${usage.total} in all`
+                        for s in usage.slices key=s.id
+                          path d=s.path fill=sliceColor(s.id)
+                      for s in usage.slices key=s.id
+                        if s.labelled
+                          // A box centred on the label's point holds it.
+                          column position="absolute" left=`${s.labelX}%` top=`${s.labelY}%` width=44 height=16 margin-left=-22 margin-top=-8 align-items="center" justify-content="center" aria-hidden=true
+                            text s.percent font="-exact-caption2" font-weight=700 color="white" font-variant-numeric="tabular-nums"
+                      column position="absolute" inset=0 align-items="center" justify-content="center"
+                        text usage.total font="-exact-title2" font-weight=700 font-variant-numeric="tabular-nums" testId="total"
+                    if diskText != ""
+                      text diskText font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="disk"
+                      progress value=(usage.totalBytes / disk.size) aria-label="Share of the disk" width=200
+                  for g in groups key=g
+                    column gap=6
+                      text groupTitle(g) font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" padding-left=4
+                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12 padding-bottom=(g == "cache" ? 12 : 0) gap=(g == "cache" ? 8 : 0)
+                        column
+                          for s, i in usage.slices.filter(x => x.group == g) key=s.id
+                            // The folder's row opens what is in it.
+                            button press=openFolder(s.id) aria-label=`${s.name}, ${s.size}, ${s.percent}` display="flex" flex-direction="row" gap=10 align-items="center" padding-top=10 padding-bottom=10 border-top=(i == 0 ? "none" : "1px solid -exact-separator") testId=`slice-${s.id}`
+                              column width=12 height=12 border-radius=6 background-color=sliceColor(s.id) aria-hidden=true
+                              text s.name testId=`name-${s.id}`
+                              text s.percent color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`percent-${s.id}`
+                              column flex=1
+                              text s.size color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`size-${s.id}`
+                              image "symbol:forward-chevron" color="-exact-tertiary-label" aria-hidden=true
+                        if g == "cache"
+                          // Confirmed here, in the popover: an alert would close it.
+                          if confirming
+                            text `Move ${usage.cacheSize} of app caches and Xcode build data to the Trash? You can put them back from there until you empty it.` font="-exact-footnote" testId="confirm-text"
+                            row gap=8 justify-content="flex-end"
+                              button press=cancelClear padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" testId="cancel-clear"
+                                text "Cancel"
+                              button press=clear padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="confirm-clear"
+                                text "Move to Trash" color="white" font-weight=600
+                          else
+                            if notice != ""
+                              text notice font="-exact-footnote" color="-exact-secondary-label" testId="notice"
+                            button press=askClear disabled=pending(cleared) padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(pending(cleared) ? 0.6 : 1) testId="clear"
+                              text (pending(cleared) ? "Moving to Trash…" : `Clear Cache ${usage.cacheSize}`)
+                      if g == "cache"
+                        text "Cached files come back on their own: apps download or rebuild them when they need them." font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4
+          else
+            // One folder's contents, largest first.
+            row align-items="center" gap=6 padding-top=10 padding-left=8 padding-right=16 padding-bottom=6
+              button press=back aria-label="Back" padding=6 border-radius=6 testId="back"
+                image "symbol:back"
+              text openedName role="heading" aria-level=1 font="-exact-headline" flex=1 testId="folder-name"
+              if not listing
+                text contents.total color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="folder-total"
+            scroll id="folder" flex=1 min-height=0 scrollbar-width="none"
+              column padding-left=12 padding-right=12 padding-bottom=12
+                if listing
+                  column align-items="center" gap=12 padding-top=80 padding-bottom=80
+                    progress aria-label="Listing"
+                    text `Listing ${openedName}…` color="-exact-secondary-label" testId="listing"
+                else if contents.error != ""
+                  text contents.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="folder-error"
+                else if items.length == 0
+                  text "Nothing in this folder." color="-exact-secondary-label" text-align="center" padding-top=40 testId="folder-empty"
+                else
+                  column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=6
+                    for it, i in items key=it.path
+                      row gap=8 align-items="center" padding-top=8 padding-bottom=8 border-top=(i == 0 ? "none" : "1px solid -exact-separator") testId=`item-${i}`
+                        column flex=1 min-width=0 gap=1
+                          text shownName(names, i, it) text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`item-name-${i}`
+                          if shownDetail(names, i, it) != ""
+                            text shownDetail(names, i, it) font="-exact-caption1" color="-exact-secondary-label" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`item-detail-${i}`
+                        column align-items="flex-end" gap=1
+                          text it.size font-variant-numeric="tabular-nums" testId=`item-size-${i}`
+                          text it.percent font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`item-percent-${i}`
+                        button press=showInFinder(it.path) aria-label=`Show ${it.name} in Finder` padding=6 border-radius=6 color="-exact-secondary-label" testId=`item-reveal-${i}`
+                          image "symbol:search"
+        column role="tabpanel" id="panel-tasks" aria-label="Activity Monitor" flex=1 min-height=0 display=(tab == "tasks" ? "flex" : "none") flex-direction="column" testId="tasks"
+          if inspected == -1
+            column gap=10 padding-left=12 padding-right=12 padding-bottom=8
+              // The machine: CPU load as Activity Monitor graphs it, and memory with its pressure.
+              row gap=10
+                column flex=1 min-width=0 gap=6 padding=10 border-radius=12 background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" testId="cpu-card"
+                  row align-items="baseline" gap=4
+                    text "CPU" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
+                    if tasks.cpuIdle != ""
+                      text `${tasks.cpuIdle}% idle` font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="cpu-idle"
+                  column border-radius=6 overflow="hidden" background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.06))" align-items="center"
+                    svg width=140 height=44 viewBox="0 0 140 44" role="img" aria-label=`CPU load: ${tasks.cpuUser}% user, ${tasks.cpuSystem}% system` testId="cpu-graph"
+                      path d=tasks.systemPath fill="-exact-system-red"
+                      path d=tasks.userPath fill="-exact-system-blue"
+                  row gap=6 align-items="center"
+                    column width=8 height=8 border-radius=4 background-color="-exact-system-red" aria-hidden=true
+                    text "System" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                    text `${tasks.cpuSystem}%` font="-exact-caption1" font-variant-numeric="tabular-nums" testId="cpu-system"
+                  row gap=6 align-items="center"
+                    column width=8 height=8 border-radius=4 background-color="-exact-system-blue" aria-hidden=true
+                    text "User" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                    text `${tasks.cpuUser}%` font="-exact-caption1" font-variant-numeric="tabular-nums" testId="cpu-user"
+                column flex=1 min-width=0 gap=6 padding=10 border-radius=12 background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" testId="memory-card"
+                  row align-items="baseline" gap=4
+                    text "Memory" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
+                    if tasks.pressure != ""
+                      text tasks.pressure font="-exact-caption1" font-weight=600 color=pressureColor(tasks.pressure) testId="pressure"
+                  column gap=1
+                    text tasks.memoryUsed font="-exact-title3" font-weight=700 font-variant-numeric="tabular-nums" testId="memory-used"
+                    text (tasks.memoryTotal == "" ? " " : `used of ${tasks.memoryTotal}`) font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="memory-total"
+                  // The share used, in the colour of the pressure.
+                  column height=6 border-radius=3 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.1))" overflow="hidden" role="meter" aria-label="Memory used" aria-valuenow=round(tasks.memoryShare * 100) aria-valuemin=0 aria-valuemax=100
+                    column width=`${tasks.memoryShare * 100}%` height=6 background-color=pressureColor(tasks.pressure)
+                  row gap=6
+                    text "Cached" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                    text tasks.cached font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-cached"
+                  row gap=6
+                    text "Swap" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                    text tasks.swap font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-swap"
+              row gap=8 align-items="center"
+                input type="search" value=query input=search placeholder="Search" aria-label="Search Processes" flex=1 min-width=0 testId="search"
+                row role="radiogroup" appearance="none" aria-label="Sort by" class=GlassTrack testId="sort"
+                  for key in ["cpu", "memory", "name"] key=key
+                    button role="radio" aria-checked=(sort == key) press=order(key) class=(sort == key ? SegmentOn : Segment) testId=`sort-${key}`
+                      text sortLabel(key) class=(sort == key ? LabelOn : Label)
+              if endNotice != ""
+                text endNotice font="-exact-footnote" color="-exact-secondary-label" testId="end-notice"
+            scroll id="processes" flex=1 min-height=0 scrollbar-width="none"
+              column padding-left=12 padding-right=12 padding-bottom=8 gap=6
+                if tasks.error != ""
+                  text tasks.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="tasks-error"
+                else if reading
+                  column align-items="center" gap=12 padding-top=40 padding-bottom=40
+                    progress aria-label="Reading processes"
+                    text "Reading processes…" color="-exact-secondary-label" testId="reading"
+                else if tasks.processes.length == 0
+                  text `No process matches “${query.trim()}”.` color="-exact-secondary-label" text-align="center" padding-top=40 testId="no-match"
+                else
+                  column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
+                    // The columns, the sorted one in bold, as Activity Monitor marks it.
+                    row gap=8 padding-top=8 padding-bottom=6 aria-hidden=true
+                      text "Process" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "name" ? 700 : 400) flex=1
+                      text "% CPU" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "cpu" ? 700 : 400) width="3.5rem" text-align="right"
+                      text "Memory" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "memory" ? 700 : 400) width="5rem" text-align="right"
+                    for p, i in tasks.processes key=p.pid
+                      // A row opens the process's inspector.
+                      button press=openProcess(p.pid) aria-label=`${p.name}, process ${p.pid}, ${p.cpu} percent CPU, ${p.memory}` display="flex" flex-direction="row" gap=8 align-items="center" padding-top=6 padding-bottom=6 border-top="1px solid -exact-separator" testId=`proc-${i}`
+                        column flex=1 min-width=0 gap=1
+                          text p.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-name-${i}`
+                          text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-detail-${i}`
+                        text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right" testId=`proc-cpu-${i}`
+                        text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right" testId=`proc-memory-${i}`
+                  text countText(tasks.count, tasks.more) font="-exact-caption1" color="-exact-secondary-label" text-align="center" testId="count"
+          else
+            // One process, as Activity Monitor's inspector shows it.
+            row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
+              button press=closeProcess aria-label="Back" padding=6 border-radius=6 testId="proc-back"
+                image "symbol:back"
+              text (infoReady ? info.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="info-name"
+            scroll id="process" flex=1 min-height=0 scrollbar-width="none"
+              column gap=10 padding-left=12 padding-right=12 padding-bottom=12
+                if not infoReady
+                  column align-items="center" gap=12 padding-top=80 padding-bottom=80
+                    progress aria-label="Reading the process"
+                else if not info.found
+                  text "This process has quit." color="-exact-secondary-label" text-align="center" padding-top=40 testId="info-gone"
+                else
+                  column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
+                    Field(label="Process ID", value=`${info.pid}`, first=true, id="info-pid")
+                    Field(label="Parent", value=info.parent, first=false, id="info-parent")
+                    Field(label="User", value=info.user, first=false, id="info-user")
+                    Field(label="% CPU", value=info.cpu, first=false, id="info-cpu")
+                    Field(label="CPU Time", value=info.cpuTime, first=false, id="info-cpu-time")
+                    Field(label="Threads", value=info.threads, first=false, id="info-threads")
+                    Field(label="Memory", value=info.memory, first=false, id="info-memory")
+                    Field(label="Real Memory", value=info.realMemory, first=false, id="info-real-memory")
+                    if info.running != ""
+                      Field(label="Running For", value=info.running, first=false, id="info-running")
+                  if info.path != ""
+                    text info.path font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4 testId="info-path"
+                  if endNotice != ""
+                    text endNotice font="-exact-footnote" color="-exact-secondary-label" testId="info-notice"
+                  // Confirmed here, in the popover: an alert would close it.
+                  if ending != ""
+                    text (ending == "force" ? `Force quit “${info.name}”? It ends at once, and anything unsaved in it is lost.` : `Quit “${info.name}”?`) font="-exact-footnote" testId="end-confirm-text"
+                    row gap=8 justify-content="flex-end"
+                      button press=cancelEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="end-cancel"
+                        text "Cancel"
+                      button press=confirmEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="end-confirm"
+                        text (ending == "force" ? "Force Quit" : "Quit") color="white" font-weight=600
+                  else
+                    row gap=8
+                      button press=askEnd("quit") disabled=(not info.mine or info.own or pending(ended)) flex=1 padding-top=7 padding-bottom=7 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(info.mine and not info.own ? 1 : 0.5) testId="end-quit"
+                        text "Quit"
+                      button press=askEnd("force") disabled=(not info.mine or info.own or pending(ended)) flex=1 padding-top=7 padding-bottom=7 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(info.mine and not info.own ? 1 : 0.5) testId="end-force"
+                        text "Force Quit"
+                    if info.own
+                      text "This is Storage. To quit it, use Quit Storage." font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
+                    else if not info.mine
+                      text `${info.name} belongs to ${info.user}. You can quit only your own processes.` font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
+        row padding-left=12 padding-right=12 padding-top=4 padding-bottom=10 justify-content="flex-end"
+          button press=quit aria-keyshortcuts="Meta+Q" padding=4 testId="quit"
+            text "Quit Storage" font="-exact-footnote" color="-exact-secondary-label"
+
+// A label and its value, a row of the process inspector.
+component Field
+  props
+    label: string
+    value: string
+    first: bool
+    id: string
+  view
+    row gap=12 align-items="baseline" padding-top=7 padding-bottom=7 border-top=(first ? "none" : "1px solid -exact-separator")
+      text label color="-exact-secondary-label"
+      text value flex=1 min-width=0 text-align="right" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=id

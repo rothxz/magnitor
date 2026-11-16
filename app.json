@@ -1,0 +1,36 @@
+{
+  "$schema": "../exact/scripts/app.schema.json",
+  "name": "Storage",
+  "short_name": "Storage",
+  "id": "com.example.storage-addab7",
+  "start_url": "/",
+  "display": "standalone",
+  "app": {
+    "id": "com.example.storage-addab7",
+    "name": "Storage"
+  },
+  "host": {
+    "web": {},
+    "macos": {
+      "minimumOS": "14.0",
+      "window": {
+        "width": 360,
+        "height": 620
+      },
+      "activationPolicy": "accessory"
+    }
+  },
+  "deploy": {
+    "store": {
+      "web": "0",
+      "macos": "0"
+    }
+  },
+  "rust": {
+    "data": {
+      "crate": "storage-data",
+      "type": "storage_data::Storage"
+    },
+    "placement": "worker"
+  }
+}

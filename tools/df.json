@@ -1,0 +1,8 @@
+{
+  "incarnations": [],
+  "execFile": {
+    "stdout": "Filesystem 1024-blocks Used Available Capacity iused ifree %iused Mounted on\n/dev/disk3s5 1000000000 400000000 500000000 45% 1 2 1% /System/Volumes/Data\n",
+    "code": 0,
+    "after": 0
+  }
+}

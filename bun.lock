@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "storage",
+      "dependencies": {
+        "@exact/child-process": "file:../exact/packages/child-process",
+      },
+    },
+  },
+  "packages": {
+    "@exact/child-process": ["@exact/child-process@file:../exact/packages/child-process", {}],
+  }
+}

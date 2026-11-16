@@ -92,7 +92,9 @@ impl TaskManager {
         let me = std::process::id() as i32;
         let found = search(&r.rows, query);
         let more = found.len().saturating_sub(SHOWN);
-        let processes = exact_first(sorted(found, sort), query).into_iter().take(SHOWN).map(|row| proc_row(row, me)).collect();
+        let shown: Vec<_> = exact_first(sorted(found, sort), query).into_iter().take(SHOWN).collect();
+        let apps: Vec<String> = shown.iter().map(|row| app_bundle(&row.raw.path)).collect();
+        let processes = shown.into_iter().zip(crate::icons::icons(&apps)).map(|(row, icon)| Proc { icon, ..proc_row(row, me) }).collect();
         let s = &r.sample.system;
         let (user_path, system_path) = graph(&self.history);
         Tasks {
@@ -214,7 +216,13 @@ fn proc_row(row: &Row, me: i32) -> Proc {
         cpu: percent(row.cpu),
         memory: format_memory(p.memory),
         mine: p.detailed && p.pid != me,
+        icon: String::new(),
     }
+}
+
+/// The outermost app bundle a path lies in (a helper's is its app's), or "" for none.
+pub fn app_bundle(path: &str) -> String {
+    path.find(".app/").map_or(String::new(), |i| path[..i + 4].to_owned())
 }
 
 /// Each process in `now` with its % CPU since `before`, `elapsed_ns` earlier. A process new
@@ -353,6 +361,14 @@ pub fn format_duration(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_helper_has_its_apps_bundle() {
+        assert_eq!(app_bundle("/Applications/Google Chrome.app/Contents/Frameworks/G.framework/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper"), "/Applications/Google Chrome.app");
+        assert_eq!(app_bundle("/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"), "/System/Library/CoreServices/Finder.app");
+        assert_eq!(app_bundle("/usr/libexec/WindowServer"), "");
+        assert_eq!(app_bundle("launchd"), "");
+    }
 
     fn proc(pid: i32, name: &str, cpu_ns: u64, memory: u64) -> RawProc {
         RawProc { pid, name: name.into(), cpu_ns, memory, started: 100, detailed: true, ..RawProc::default() }

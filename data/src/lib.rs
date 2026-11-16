@@ -11,6 +11,7 @@ use exact_runner::{Answer, DataError, DataSource, Store, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub mod icons;
 pub mod sample;
 pub mod tasks;
 pub mod walk;

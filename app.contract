@@ -62,6 +62,8 @@ shape Proc
   cpu: string
   memory: string
   mine: bool
+  // Its app's icon as a PNG data URL ("" for a process outside an app).
+  icon: string
 
 shape Tasks
   cpuUser: string
@@ -199,7 +201,8 @@ component Storage
   derive diskText = disk.size > 0 and usage.total != "" ? `These folders use ${percentText(usage.totalBytes / disk.size)} of your disk. ${disk.free} is free.` : ""
   derive listing = opened != "" and (not current(contents) or contents.id != opened)
   derive reading = tasks.count == 0 and tasks.error == ""
-  derive infoReady = info.pid == inspected and current(info)
+  // Shown from the first reading of this process on; a tick's re-reading keeps it on screen.
+  derive infoReady = info.pid == inspected
 
   action quit
     close()
@@ -442,7 +445,12 @@ component Storage
                     for p, i in tasks.processes key=p.pid
                       // A row opens the process's inspector.
                       button press=openProcess(p.pid) aria-label=`${p.name}, process ${p.pid}, ${p.cpu} percent CPU, ${p.memory}` display="flex" flex-direction="row" gap=8 align-items="center" padding-top=6 padding-bottom=6 border-top="1px solid -exact-separator" testId=`proc-${i}`
-                        column flex=1 min-width=0 gap=1
+                        if p.icon != ""
+                          image p.icon width=20 height=20 flex-shrink=0 aria-hidden=true testId=`proc-icon-${i}`
+                        else
+                          column width=20 height=20 flex-shrink=0 align-items="center" justify-content="center" aria-hidden=true
+                            image "symbol:settings" font="-exact-title3" color="-exact-tertiary-label"
+                        column flex=1 min-width=0 gap=1 text-align="left"
                           text p.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-name-${i}`
                           text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-detail-${i}`
                         text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right" testId=`proc-cpu-${i}`

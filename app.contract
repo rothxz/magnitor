@@ -1,4 +1,4 @@
-// Storage: the view. Two tabs under a segmented control: Activity Monitor (processes, CPU
+// Magnitor: the view. Two tabs under a segmented control: Activity Monitor (processes, CPU
 // and memory, after the Mac's own) and Storage. The Rust crate in data/ measures the folders and lists what is
 // in each, walking them on many threads, and reads the processes, CPU and memory; app.ts
 // answers the disk's size, the apps' names, Clear Cache and Show in Finder. On macOS the app lives in the menu bar (app.json's
@@ -182,7 +182,7 @@ fn chordText(keys: string): string = keys.split("+").map(k => keyGlyph(k)).join(
 fn chordKey(e: KeyboardEvent): string = e.code.startsWith("Key") ? e.code.slice(3) : e.code.startsWith("Digit") ? e.code.slice(5) : e.key == " " ? "Space" : e.key.length == 1 ? e.key.toUpperCase() : e.key
 fn chordOf(e: KeyboardEvent): string = [e.ctrlKey ? "Control" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.metaKey ? "Meta" : "", chordKey(e)].filter(p => p != "").join("+")
 fn isModifier(k: string): bool = k == "Meta" or k == "Control" or k == "Alt" or k == "Shift" or k == "CapsLock" or k == "Fn"
-fn checkProblem(c: GlobalShortcutCheck): string = c.registered ? "" : match c.reason { case some(r) => r == "in-use" ? `Another app uses ${chordText(c.keys)}. Choose another shortcut.` : r == "reserved" ? `macOS keeps ${chordText(c.keys)} for itself. Choose another shortcut.` : `Storage can’t use ${chordText(c.keys)}. Choose another shortcut.`, case none => `Storage can’t use ${chordText(c.keys)}. Choose another shortcut.` }
+fn checkProblem(c: GlobalShortcutCheck): string = c.registered ? "" : match c.reason { case some(r) => r == "in-use" ? `Another app uses ${chordText(c.keys)}. Choose another shortcut.` : r == "reserved" ? `macOS keeps ${chordText(c.keys)} for itself. Choose another shortcut.` : `Magnitor can’t use ${chordText(c.keys)}. Choose another shortcut.`, case none => `Magnitor can’t use ${chordText(c.keys)}. Choose another shortcut.` }
 
 // The menu bar item's symbol for each icon style.
 fn trayIconSymbol(icon: string): string = icon == "gauge" ? "symbol:sf/gauge.with.dots.needle.33percent" : icon == "cpu" ? "symbol:sf/cpu" : icon == "memory" ? "symbol:sf/memorychip" : icon == "disk" ? "symbol:sf/internaldrive" : icon == "chart" ? "symbol:sf/chart.pie" : "symbol:sf/waveform.path.ecg"
@@ -234,7 +234,7 @@ style LabelOn
   color = "-exact-label"
   font-weight = 600
 
-component Storage
+component Magnitor
   // The tab the popover shows: "tasks" (Activity Monitor, the first) or "storage".
   state tab = "tasks"
   // Whether the popover is open: Activity Monitor reads the machine only while it is seen.
@@ -327,9 +327,9 @@ component Storage
     every(5000, watch)
   derive inWindow = page.name == "settings"
   // The menu bar item's title and tooltip; with the load shown it is all AppKit draws.
-  derive trayLabel = trayShow == "icon" ? "Storage" : trayTitle(trayShow, vitals)
-  derive alertsNote = not alertsOn ? "Storage checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Storage are off. Turn them on in System Settings › Notifications › Storage." : `Storage tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.`
-  derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Storage from any app." : `Press ${chordText(hotkey)} in any app to open Storage.`
+  derive trayLabel = trayShow == "icon" ? "Magnitor" : trayTitle(trayShow, vitals)
+  derive alertsNote = not alertsOn ? "Magnitor checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Magnitor are off. Turn them on in System Settings › Notifications › Magnitor." : `Magnitor tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.`
+  derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Magnitor from any app." : `Press ${chordText(hotkey)} in any app to open Magnitor.`
   derive groups = ["cache", "device"].filter(g => usage.slices.filter(s => s.group == g).length > 0)
   derive measuring = not current(usage)
   derive openedName = usage.slices.filter(s => s.id == opened).map(s => s.name).join("")
@@ -400,7 +400,7 @@ component Storage
   action setSustain(v: string)
     sustain = number(v)
   action testAlert
-    showNotification(title="Storage alerts are on", body="This is how Storage tells you when your Mac crosses a limit you set.", tag="test")
+    showNotification(title="Magnitor alerts are on", body="This is how Magnitor tells you when your Mac crosses a limit you set.", tag="test")
   // Each pulse: the reading from the last one is checked against the limits, and the widget's
   // reading is written each minute (and at once when what it shows changes).
   action watch
@@ -415,7 +415,7 @@ component Storage
           cpuSince = now
         else if not cpuAlerted and now - cpuSince >= sustain * 1000
           cpuAlerted = true
-          showNotification(title="CPU usage is high", body=`Your Mac’s CPU has been over ${cpuLimit}% for ${sustainText(sustain)}, and is at ${round(vitals.cpu)}% now. Open Activity Monitor in Storage to see what’s using it.`, tag="cpu")
+          showNotification(title="CPU usage is high", body=`Your Mac’s CPU has been over ${cpuLimit}% for ${sustainText(sustain)}, and is at ${round(vitals.cpu)}% now. Open Activity Monitor in Magnitor to see what’s using it.`, tag="cpu")
       else
         cpuSince = 0
         if vitals.cpu < cpuLimit - 10 or not alertsOn
@@ -434,7 +434,7 @@ component Storage
       if alertsOn and diskLimit > 0 and disk.freeBytes < diskLimit * 1000000000
         if not diskAlerted
           diskAlerted = true
-          showNotification(title="Your disk is almost full", body=`Only ${disk.free} is free. Open Storage to see what’s using the space and clear caches.`, tag="disk")
+          showNotification(title="Your disk is almost full", body=`Only ${disk.free} is free. Open Magnitor to see what’s using the space and clear caches.`, tag="disk")
       else if disk.freeBytes > diskLimit * 1200000000 or not alertsOn
         diskAlerted = false
     if widgetOn and vitals.pressure != "" and (widgetAt == 0 or now - widgetAt >= 60000 or widgetShown != widgetShows)
@@ -540,7 +540,7 @@ component Storage
                         progress aria-label="Measuring"
                         text "Measuring your folders…" color="-exact-secondary-label" testId="measuring"
                     else if usage.slices.length == 0
-                      text "None of the folders Storage measures has anything in it." color="-exact-secondary-label" text-align="center" padding-top=40 testId="empty"
+                      text "None of the folders Magnitor measures has anything in it." color="-exact-secondary-label" text-align="center" padding-top=40 testId="empty"
                     else
                       column align-items="center" gap=8
                         column position="relative" width=190 height=190 testId="chart"
@@ -740,7 +740,7 @@ component Storage
                           button press=askEnd("force") disabled=(not info.mine or info.own or pending(ended)) flex=1 padding-top=7 padding-bottom=7 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(info.mine and not info.own ? 1 : 0.5) testId="end-force"
                             text "Force Quit"
                         if info.own
-                          text "This is Storage. To quit it, use Quit Storage." font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
+                          text "This is Magnitor. To quit it, use Quit Magnitor." font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
                         else if not info.mine
                           text `${info.name} belongs to ${info.user}. You can quit only your own processes.` font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
             // Settings (⌘,: the Mac's Settings window) and Quit.
@@ -749,7 +749,7 @@ component Storage
                 image "symbol:settings"
               column flex=1
               button press=quit aria-keyshortcuts="Meta+Q" padding=4 testId="quit"
-                text "Quit Storage" font="-exact-footnote" color="-exact-secondary-label"
+                text "Quit Magnitor" font="-exact-footnote" color="-exact-secondary-label"
         if e.name == "settings"
           column navigationKey=`${e.id}` navigationScroll="settings-form" position="absolute" inset=0 display="flex" flex-direction="column" testId="settings"
             header display="flex" align-items="center"
@@ -763,7 +763,7 @@ component Storage
                 header
                   text "Keyboard Shortcut"
                 row
-                  text "Open Storage"
+                  text "Open Magnitor"
                   row gap=6 align-items="center"
                     button id="hotkey" tabindex=0 buttonStyle="bordered" press=record key=recordKey blur=stopRecording aria-label=(hotkey == "" ? "Record Shortcut" : `Shortcut ${chordText(hotkey)}. Record another`) testId="hotkey"
                       text (recording ? "Type Shortcut…" : hotkey == "" ? "Record Shortcut" : chordText(hotkey))
@@ -789,7 +789,7 @@ component Storage
                         button role="radio" aria-checked=(trayIcon == icon) press=setTrayIcon(icon) aria-label=trayIconName(icon) testId=`tray-icon-${icon}`
                           image trayIconSymbol(icon)
                 footer
-                  text (trayShow == "icon" ? "The icon Storage shows in the menu bar." : "The menu bar shows your Mac’s load, read every two seconds.") testId="tray-note"
+                  text (trayShow == "icon" ? "The icon Magnitor shows in the menu bar." : "The menu bar shows your Mac’s load, read every two seconds.") testId="tray-note"
               section
                 header
                   text "Desktop Widget"
@@ -807,7 +807,7 @@ component Storage
                   column width=158 height=158 padding=14 border-radius=22 background-color="-exact-secondary-background" aria-label="Widget preview" testId="widget-preview"
                     VitalsWidget(shows=widgetPreview.shows, cpu=widgetPreview.cpu, memory=widgetPreview.memory, pressure=widgetPreview.pressure, free=widgetPreview.free, freeShare=widgetPreview.freeShare, updated=widgetPreview.updated, ready=widgetPreview.ready)
                 footer
-                  text "To add the widget, Control-click the desktop, choose Edit Widgets, then find Storage. Storage updates it each minute while it runs." testId="widget-note"
+                  text "To add the widget, Control-click the desktop, choose Edit Widgets, then find Magnitor. Magnitor updates it each minute while it runs." testId="widget-note"
               section
                 header
                   text "Alerts"
@@ -867,7 +867,7 @@ component VitalsWidget
     column gap=8 flex=1 justify-content="center" testId="widget"
       if not ready
         image "symbol:activity" width=28 height=28 color="-exact-secondary-label" aria-hidden=true
-        text "Open Storage to see your Mac’s load here." font="-exact-footnote" color="-exact-secondary-label" testId="widget-empty"
+        text "Open Magnitor to see your Mac’s load here." font="-exact-footnote" color="-exact-secondary-label" testId="widget-empty"
       else
         if shows != "disk"
           Meter(label="CPU", value=`${round(cpu)}%`, share=cpu / 100, tint="blue", id="widget-cpu")

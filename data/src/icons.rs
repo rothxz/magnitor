@@ -49,7 +49,7 @@ fn app_icon(app: &str) -> String {
 
 fn draw(icns: &str) -> Option<String> {
     static COUNT: AtomicUsize = AtomicUsize::new(0);
-    let out = std::env::temp_dir().join(format!("storage-icon-{}-{}.png", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
+    let out = std::env::temp_dir().join(format!("magnitor-icon-{}-{}.png", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
     let ok = Command::new("/usr/bin/sips")
         .args(["-s", "format", "png", "-Z", "64", icns, "--out"])
         .arg(&out)

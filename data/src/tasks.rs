@@ -155,7 +155,7 @@ impl TaskManager {
             return Ended { ok: false, message: format!("{name} is part of macOS and can’t be quit.") };
         }
         if pid == std::process::id() as i32 {
-            return Ended { ok: false, message: "To quit Storage, use Quit Storage.".into() };
+            return Ended { ok: false, message: "To quit Magnitor, use Quit Magnitor.".into() };
         }
         match sample::end(pid, force) {
             Ok(()) => Ended { ok: true, message: if force { format!("Force quit {name}.") } else { format!("Asked {name} to quit.") } },

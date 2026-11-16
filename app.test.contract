@@ -39,7 +39,7 @@ test "each folder's size and share of the total"
   expect tree missing "slice-music"
   expect text "disk" == "These folders use <0.1% of your disk. 512 GB is free."
   expect text "clear" == "Clear Cache 246 KB"
-  expect text "quit" == "Quit Storage"
+  expect text "quit" == "Quit Magnitor"
 
 test "Clear Cache asks first, and Cancel moves nothing"
   clock +2000 real
@@ -136,7 +136,7 @@ test "a folder on this Mac opens too"
   expect text "item-percent-0" == "100%"
 
 // Activity Monitor reads this Mac's real processes, so these tests name only what every Mac
-// runs: Storage itself, Finder (this user's) and launchd (root's, pid 1). Nothing is quit:
+// runs: Magnitor itself, Finder (this user's) and launchd (root's, pid 1). Nothing is quit:
 // each Quit is cancelled.
 
 test "Activity Monitor is the first tab, and the control switches to Storage and back"
@@ -167,19 +167,19 @@ test "Activity Monitor reads again while it is open"
   expect state tick >= 1
   expect state tasks.error == ""
 
-test "a search finds Storage itself, which quits only from Quit Storage"
+test "a search finds Magnitor itself, which quits only from Quit Magnitor"
   clock +2000 real
   tap "status-item"
   clock settle
   tap "tab-tasks"
   clock data
-  type "search" "Storage"
+  type "search" "Magnitor"
   clock data
-  expect text "proc-name-0" == "Storage"
+  expect text "proc-name-0" == "Magnitor"
   tap "proc-0"
   clock data
-  expect text "info-name" == "Storage"
-  expect text "end-why" == "This is Storage. To quit it, use Quit Storage."
+  expect text "info-name" == "Magnitor"
+  expect text "end-why" == "This is Magnitor. To quit it, use Quit Magnitor."
   tap "proc-back"
   expect state inspected == -1
   expect tree has "search"
@@ -246,7 +246,7 @@ test "sorting and a search that matches nothing"
 test "a recorded shortcut is kept; a key without ⌘ or ⌃ is refused, and Clear forgets it"
   at "/settings"
   expect text "hotkey" == "Record Shortcut"
-  expect text "hotkey-note" == "Choose keys that open Storage from any app."
+  expect text "hotkey-note" == "Choose keys that open Magnitor from any app."
   tap "hotkey"
   expect state recording == true
   expect text "hotkey-note" == "Press the keys together. Escape cancels."
@@ -258,7 +258,7 @@ test "a recorded shortcut is kept; a key without ⌘ or ⌃ is refused, and Clea
   expect state hotkey == "Control+Alt+Meta+S"
   expect state recording == false
   expect text "hotkey" == "⌃⌥⌘S"
-  expect text "hotkey-note" == "Press ⌃⌥⌘S in any app to open Storage."
+  expect text "hotkey-note" == "Press ⌃⌥⌘S in any app to open Magnitor."
   tap "hotkey-clear"
   expect state hotkey == ""
   expect text "hotkey" == "Record Shortcut"
@@ -279,7 +279,7 @@ test "Escape stops recording and keeps the shortcut"
 test "the menu bar item shows the chosen icon, or the load in its place"
   at "/settings"
   expect state trayShow == "icon"
-  expect state trayLabel == "Storage"
+  expect state trayLabel == "Magnitor"
   tap "tray-icon-cpu"
   expect state trayIcon == "cpu"
   type "tray-show" "both"
@@ -327,7 +327,7 @@ test "no alert while alerts are off"
 
 test "the widget shows the last reading, as Settings previews it"
   at "/settings"
-  expect text "widget-empty" == "Open Storage to see your Mac’s load here."
+  expect text "widget-empty" == "Open Magnitor to see your Mac’s load here."
   clock +5000
   clock data
   clock +5000

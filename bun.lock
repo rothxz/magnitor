@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "storage",
+      "name": "magnitor",
       "dependencies": {
         "@exact/child-process": "file:../exact/packages/child-process",
         "@exact/global-shortcuts": "file:../exact/packages/global-shortcuts",

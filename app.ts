@@ -1,4 +1,4 @@
-// Storage: the quick sources. The Rust crate in data/ answers `usage` and `contents`, walking the
+// Magnitor: the quick sources. The Rust crate in data/ answers `usage` and `contents`, walking the
 // folders on many threads; this answers the disk's size with `df`, the apps' names from
 // Spotlight, Clear Cache with `trash` and Show in Finder with `open`, and keeps the desktop
 // widget's reading (`saveWidget`, which the widget's `widgetVitals` reads). Every child runs with
@@ -25,7 +25,7 @@ export const grants = [
 
 // The cache folders Clear Cache empties. This app's own cache stays: it is in use.
 const CACHE_DIRS = ['Library/Caches', 'Library/Developer/Xcode/DerivedData'];
-const OWN_CACHE = 'com.example.storage-addab7';
+const OWN_CACHE = 'com.example.magnitor-addab7';
 
 // Finder's decimal units: 511 KB, 211.2 MB, 2 GB (data/src/lib.rs's `format_bytes`).
 export function formatBytes(bytes: number): string {
@@ -156,7 +156,7 @@ interface WidgetReading { shows: string; cpu: number; memory: number; pressure: 
 
 const NO_READING: WidgetProps = {
   shows: 'all', cpu: 0, memory: 0, pressure: '', free: '', freeShare: 0,
-  updated: 'Open Storage to start', ready: false,
+  updated: 'Open Magnitor to start', ready: false,
 };
 
 // The reading as the widget shows it, with the time it was taken.

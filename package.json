@@ -1,5 +1,5 @@
 {
-  "name": "storage",
+  "name": "magnitor",
   "private": true,
   "scripts": {
     "build": "bun exact.mjs web-build --out dist",

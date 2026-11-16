@@ -60,7 +60,7 @@ pub use mac::{end, system, take};
 /// these every few seconds.
 #[cfg(not(target_os = "macos"))]
 pub fn system() -> Result<RawSystem, String> {
-    Err("Storage reads the CPU and memory on macOS only.".into())
+    Err("Magnitor reads the CPU and memory on macOS only.".into())
 }
 
 #[cfg(not(target_os = "macos"))]

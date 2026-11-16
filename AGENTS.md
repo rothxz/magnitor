@@ -1,5 +1,5 @@
 <!-- exact:begin (exact new writes this block; bun exact.mjs update rewrites it) -->
-# storage: an Exact app
+# magnitor: an Exact app
 
 `app.contract` is the view, `app.ts` the data module, `app.test.contract` the tests, `app.json`
 the manifest: set `app.name` and `app.id` before building. The app uses Exact at

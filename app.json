@@ -1,13 +1,13 @@
 {
   "$schema": "../exact/scripts/app.schema.json",
-  "name": "Storage",
-  "short_name": "Storage",
-  "id": "com.example.storage-addab7",
+  "name": "Magnitor",
+  "short_name": "Magnitor",
+  "id": "com.example.magnitor-addab7",
   "start_url": "/",
   "display": "standalone",
   "app": {
-    "id": "com.example.storage-addab7",
-    "name": "Storage"
+    "id": "com.example.magnitor-addab7",
+    "name": "Magnitor"
   },
   "host": {
     "web": {},
@@ -28,15 +28,15 @@
   },
   "rust": {
     "data": {
-      "crate": "storage-data",
-      "type": "storage_data::Storage"
+      "crate": "magnitor-data",
+      "type": "magnitor_data::Magnitor"
     },
     "placement": "worker"
   },
   "widgets": [
     {
       "kind": "vitals",
-      "title": "Storage",
+      "title": "Magnitor",
       "description": "Your Mac's CPU, memory and free disk space.",
       "families": [
         "systemSmall",

@@ -1,4 +1,4 @@
-//! Storage's measuring: app.contract's `usage` (every folder's size, for the pie) and
+//! Magnitor's measuring: app.contract's `usage` (every folder's size, for the pie) and
 //! `contents` (what one folder holds), answered by walking the home folder on a thread per
 //! core (`walk`); and Activity Monitor's `tasks`, `process` and `endProcess` (`tasks`, reading
 //! the machine with `sample`); and `vitals`, the machine's load alone, for the menu bar, the
@@ -49,7 +49,7 @@ const FOLDERS: &[Measured] = &[
 
 /// The source: each folder's last walk, by id, with the generation it was made for.
 #[derive(Default)]
-pub struct Storage {
+pub struct Magnitor {
     walked: HashMap<&'static str, (i64, walk::Folder)>,
     tasks: tasks::TaskManager,
     vitals: vitals::Monitor,
@@ -67,7 +67,7 @@ fn threads() -> usize {
     std::thread::available_parallelism().map_or(4, |n| n.get())
 }
 
-impl Storage {
+impl Magnitor {
     /// Walk `which` (indexes into `FOLDERS`) together, sharing the threads, and keep each.
     fn walk(&mut self, which: &[usize], generation: i64) {
         let home = home();
@@ -111,7 +111,7 @@ impl Storage {
     }
 }
 
-impl DataSource for Storage {
+impl DataSource for Magnitor {
     /// Nothing is known before the walk or a reading: every resource is asked at launch.
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         match source {

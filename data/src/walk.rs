@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn measures_each_child_and_the_loose_files_on_many_threads() {
-        let dir = std::env::temp_dir().join(format!("storage-walk-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("magnitor-walk-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("a/deep/deeper")).unwrap();
         std::fs::create_dir_all(dir.join("b")).unwrap();

@@ -6,7 +6,7 @@ fn main() {
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     for t in [1, threads] {
         let start = std::time::Instant::now();
-        let folders = storage_data::walk::measure(&roots, t);
+        let folders = magnitor_data::walk::measure(&roots, t);
         let total: u64 = folders.iter().map(|f| f.total).sum();
         println!("{t:2} threads: {:.2} s, {} bytes", start.elapsed().as_secs_f64(), total);
     }

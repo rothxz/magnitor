@@ -1,9 +1,9 @@
-# Storage's measuring: the DataSource that answers app.contract's `usage` and `contents`,
+# Magnitor's measuring: the DataSource that answers app.contract's `usage` and `contents`,
 # walking the home folder's directories on a thread per core (docs/reference.md, "Rust data
 # sources"). app.ts answers the other sources. It is a member of the workspace exact2
 # generates from app.json, which also holds the host crates that link it.
 [package]
-name = "storage-data"
+name = "magnitor-data"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ publish = false
 workspace = "../.exact/shells"
 
 [lib]
-name = "storage_data"
+name = "magnitor_data"
 crate-type = ["rlib"]
 
 [dependencies]

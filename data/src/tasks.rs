@@ -108,7 +108,10 @@ impl TaskManager {
             memory_total: format_memory(s.memory_total),
             memory_share: if s.memory_total > 0 { (s.memory_used as f64 / s.memory_total as f64).min(1.0) } else { 0.0 },
             pressure: pressure(s.pressure).into(),
+            thermal: thermal(s.thermal).into(),
+            temperature: temperature(s.cpu_temperature),
             cached: format_memory(s.memory_cached),
+            compressed: format_memory(s.memory_compressed),
             swap: format_memory(s.swap_used),
             count: r.rows.len() as f64,
             processes,
@@ -180,7 +183,10 @@ fn empty_tasks() -> Tasks {
         memory_total: String::new(),
         memory_share: 0.0,
         pressure: String::new(),
+        thermal: String::new(),
+        temperature: String::new(),
         cached: String::new(),
+        compressed: String::new(),
         swap: String::new(),
         count: 0.0,
         processes: Vec::new(),
@@ -314,6 +320,23 @@ pub fn pressure(level: i32) -> &'static str {
     }
 }
 
+/// The thermal pressure in `ProcessInfo.thermalState`'s words (nominal shown as "Normal", as
+/// memory's is): how hard macOS is working to cool the Mac, not a temperature. "" when unread.
+pub fn thermal(level: Option<u64>) -> &'static str {
+    match level {
+        None => "",
+        Some(0) => "Normal",
+        Some(1) => "Fair",
+        Some(2) => "Serious",
+        Some(_) => "Critical",
+    }
+}
+
+/// The CPU's temperature in whole degrees, "47 °C"; "" when unread.
+pub fn temperature(celsius: Option<f64>) -> String {
+    celsius.map_or(String::new(), |t| format!("{} °C", t.round()))
+}
+
 /// % CPU as Activity Monitor shows it: one decimal.
 pub fn percent(value: f64) -> String {
     format!("{:.1}", value.max(0.0))
@@ -425,6 +448,19 @@ mod tests {
         assert_eq!(format_duration(3 * 3600 + 300), "3 h 5 min");
         assert_eq!(format_duration(86_400 + 4 * 3600), "1 day 4 h");
         assert_eq!(percent(12.345), "12.3");
+    }
+
+    #[test]
+    fn names_the_thermal_pressure_as_thermal_state_does() {
+        assert_eq!(thermal(None), "");
+        assert_eq!(thermal(Some(0)), "Normal");
+        assert_eq!(thermal(Some(1)), "Fair");
+        assert_eq!(thermal(Some(2)), "Serious");
+        assert_eq!(thermal(Some(3)), "Critical");
+        assert_eq!(thermal(Some(4)), "Critical");
+        assert_eq!(temperature(Some(47.4)), "47 °C");
+        assert_eq!(temperature(Some(47.6)), "48 °C");
+        assert_eq!(temperature(None), "");
     }
 
     #[test]

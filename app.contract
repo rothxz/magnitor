@@ -90,7 +90,14 @@ shape Tasks
   memoryTotal: string
   memoryShare: number
   pressure: string
+  // How hard macOS is cooling the Mac (ProcessInfo's thermal state, not a temperature):
+  // "Normal", "Fair", "Serious" or "Critical"; "" when it can't be read.
+  thermal: string
+  // The CPU dies' average temperature, "47 °C"; "" on a Mac without die sensors.
+  temperature: string
   cached: string
+  // Memory the compressor holds: the first sign of pressure, before swap.
+  compressed: string
   swap: string
   count: number
   processes: Proc[]
@@ -173,6 +180,8 @@ fn sortLabel(key: string): string = key == "cpu" ? "CPU" : key == "memory" ? "Me
 
 // Activity Monitor's memory pressure colours.
 fn pressureColor(p: string): string = p == "Critical" ? "-exact-system-red" : p == "Warning" ? "-exact-system-yellow" : "-exact-system-green"
+// The thermal state's colours, as the memory pressure's run from green to red.
+fn thermalColor(t: string): string = t == "Critical" ? "-exact-system-red" : t == "Serious" ? "-exact-system-orange" : t == "Fair" ? "-exact-system-yellow" : "-exact-system-green"
 
 // A chord as the Mac's menus write it: Control+Alt+Meta+S is ⌃⌥⌘S.
 fn keyGlyph(k: string): string = k == "Control" ? "⌃" : k == "Alt" ? "⌥" : k == "Shift" ? "⇧" : k == "Meta" ? "⌘" : k == "ArrowUp" ? "↑" : k == "ArrowDown" ? "↓" : k == "ArrowLeft" ? "←" : k == "ArrowRight" ? "→" : k == "Enter" ? "↩" : k == "Backspace" ? "⌫" : k == "Delete" ? "⌦" : k == "Tab" ? "⇥" : k == "Space" ? "Space" : k
@@ -642,6 +651,13 @@ component Magnitor
                         column width=8 height=8 border-radius=4 background-color="-exact-system-blue" aria-hidden=true
                         text "User" font="-exact-caption1" color="-exact-secondary-label" flex=1
                         text `${tasks.cpuUser}%` font="-exact-caption1" font-variant-numeric="tabular-nums" testId="cpu-user"
+                      if tasks.thermal != ""
+                        row gap=6 align-items="center"
+                          column width=8 height=8 border-radius=4 background-color=thermalColor(tasks.thermal) aria-hidden=true
+                          text "Thermal" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                          // The degrees where the Mac has die sensors; coloured by the state, the
+                          // public and reliable signal.
+                          text (tasks.temperature == "" ? tasks.thermal : `${tasks.temperature} · ${tasks.thermal}`) font="-exact-caption1" font-weight=600 color=thermalColor(tasks.thermal) font-variant-numeric="tabular-nums" testId="thermal"
                     column flex=1 min-width=0 gap=6 padding=10 border-radius=12 background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" testId="memory-card"
                       row align-items="baseline" gap=4
                         text "Memory" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
@@ -656,6 +672,11 @@ component Magnitor
                       row gap=6
                         text "Cached" font="-exact-caption1" color="-exact-secondary-label" flex=1
                         text tasks.cached font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-cached"
+                      // Least to most serious: cached files go freely, compression comes first under
+                      // pressure, swap last.
+                      row gap=6
+                        text "Compressed" font="-exact-caption1" color="-exact-secondary-label" flex=1
+                        text tasks.compressed font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-compressed"
                       row gap=6
                         text "Swap" font="-exact-caption1" color="-exact-secondary-label" flex=1
                         text tasks.swap font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-swap"

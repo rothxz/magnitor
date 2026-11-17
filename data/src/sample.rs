@@ -5,7 +5,11 @@
 //! its CPU time, threads, start, and its memory footprint, the figure Activity Monitor's Memory
 //! column shows. The kernel answers those only for the user's own processes; for the rest
 //! (root's, the system daemons') `/bin/ps`, which is set-uid root, gives the CPU time and resident
-//! memory. The system's figures are mach's `host_statistics` and a few `sysctl`s.
+//! memory. `ps` is asked about those processes alone and names no account: resolving every
+//! process's command and owner is most of its cost, and the uid is enough to name the owner
+//! here, once per run. The system's figures are mach's `host_statistics` and a few `sysctl`s,
+//! and the thermal pressure is libnotify's state for `com.apple.system.thermalpressurelevel`,
+//! the public figure `ProcessInfo.thermalState` reports: a read of shared memory, no process.
 //!
 //! Elsewhere there is no reading: `take` says so, and the view shows the error.
 
@@ -42,9 +46,18 @@ pub struct RawSystem {
     pub memory_used: u64,
     /// Cached files: file-backed and purgeable pages.
     pub memory_cached: u64,
+    /// Memory the compressor holds (Activity Monitor's Compressed): what macOS squeezed before
+    /// it swaps.
+    pub memory_compressed: u64,
     pub swap_used: u64,
     /// The kernel's pressure: 1 normal, 2 warning, 4 critical (`kern.memorystatus_vm_pressure_level`).
     pub pressure: i32,
+    /// The thermal pressure: 0 nominal, 1 moderate, 2 heavy, 3 trapping, 4 sleeping
+    /// (`OSThermalPressureLevel` on macOS); `None` when it can't be read.
+    pub thermal: Option<u64>,
+    /// The CPU dies' average temperature in °C (`sensors`), read for Activity Monitor's
+    /// readings alone, not the idle watch's; `None` there or when the Mac has no die sensors.
+    pub cpu_temperature: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -86,8 +99,8 @@ pub fn parse_cpu_time(text: &str) -> Option<u64> {
     Some(((days * 86_400.0 + seconds) * 1e9).round() as u64)
 }
 
-/// `ps -axo pid=,ppid=,uid=,rss=,time=,user=,comm=`: each process `ps` sees, by pid. `comm` is
-/// last since it can hold spaces.
+/// `ps -o pid=,ppid=,uid=,rss=,time=,comm= -p …`: each process `ps` sees, by pid, its owner
+/// unnamed (the caller names it from `uid`). `comm` is last since it can hold spaces.
 pub fn parse_ps(out: &str) -> Vec<RawProc> {
     out.lines()
         .filter_map(|line| {
@@ -97,13 +110,11 @@ pub fn parse_ps(out: &str) -> Vec<RawProc> {
             let uid = fields.next()?.parse().ok()?;
             let rss: u64 = fields.next()?.parse().ok()?;
             let cpu_ns = parse_cpu_time(fields.next()?)?;
-            let user = fields.next()?.to_owned();
             let comm = fields.collect::<Vec<_>>().join(" ");
             Some(RawProc {
                 pid,
                 ppid,
                 uid,
-                user,
                 name: base_name(&comm).to_owned(),
                 path: comm,
                 cpu_ns,
@@ -256,6 +267,24 @@ mod mac {
         fn sysctlbyname(name: *const c_char, old: *mut c_void, old_len: *mut usize, new: *mut c_void, new_len: usize) -> c_int;
         fn getpwuid(uid: u32) -> *const Passwd;
         fn kill(pid: c_int, signal: c_int) -> c_int;
+        // <notify.h>
+        fn notify_register_check(name: *const c_char, out_token: *mut c_int) -> u32;
+        fn notify_get_state(token: c_int, state: *mut u64) -> u32;
+    }
+
+    /// <libkern/OSThermalNotification.h>'s `kOSThermalNotificationPressureLevelName`.
+    const THERMAL_PRESSURE: &CStr = c"com.apple.system.thermalpressurelevel";
+
+    /// The thermal pressure level. The token is registered once; each read after is a read of
+    /// shared memory, so it costs nothing to ask on every reading.
+    fn thermal() -> Option<u64> {
+        static TOKEN: OnceLock<Option<c_int>> = OnceLock::new();
+        let token = (*TOKEN.get_or_init(|| {
+            let mut token = 0;
+            (unsafe { notify_register_check(THERMAL_PRESSURE.as_ptr(), &mut token) } == 0).then_some(token)
+        }))?;
+        let mut state = 0u64;
+        (unsafe { notify_get_state(token, &mut state) } == 0).then_some(state)
     }
 
     /// The host port, asked once: each `mach_host_self` takes a send right.
@@ -285,6 +314,13 @@ mod mac {
     fn c_text(bytes: &[u8]) -> String {
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
         String::from_utf8_lossy(&bytes[..end]).into_owned()
+    }
+
+    /// Account names by uid, kept for the run: each `getpwuid` may ask opendirectoryd, and the
+    /// few accounts that own processes don't change while Magnitor runs.
+    fn user_names() -> &'static std::sync::Mutex<HashMap<u32, String>> {
+        static NAMES: OnceLock<std::sync::Mutex<HashMap<u32, String>>> = OnceLock::new();
+        NAMES.get_or_init(Default::default)
     }
 
     /// Each uid's account name, looked up once.
@@ -390,9 +426,12 @@ mod mac {
         h.finish()
     }
 
-    /// Every process `ps` sees, for those libproc won't describe.
-    fn from_ps() -> HashMap<i32, RawProc> {
-        let Ok(out) = std::process::Command::new("/bin/ps").args(["-axo", "pid=,ppid=,uid=,rss=,time=,user=,comm="]).output() else {
+    /// `pids` as `ps` sees them, for those libproc won't describe. Asking for these alone, not
+    /// `-ax`, spares `ps` reading every other process's command: a quarter of the cost. A pid
+    /// gone since it was listed is left out (and `ps` exits 1, which changes nothing here).
+    fn from_ps(pids: &[i32]) -> HashMap<i32, RawProc> {
+        let list = pids.iter().map(i32::to_string).collect::<Vec<_>>().join(",");
+        let Ok(out) = std::process::Command::new("/bin/ps").args(["-o", "pid=,ppid=,uid=,rss=,time=,comm=", "-p", &list]).output() else {
             return HashMap::new();
         };
         parse_ps(&String::from_utf8_lossy(&out.stdout)).into_iter().map(|p| (p.pid, p)).collect()
@@ -402,6 +441,17 @@ mod mac {
         Ok(counters())
     }
 
+    /// Figures fixed while the machine runs, asked once.
+    fn page_size() -> u64 {
+        static PAGE: OnceLock<u64> = OnceLock::new();
+        *PAGE.get_or_init(|| sysctl::<u64>(c"hw.pagesize").unwrap_or(16_384))
+    }
+
+    fn memory_size() -> u64 {
+        static SIZE: OnceLock<u64> = OnceLock::new();
+        *SIZE.get_or_init(|| sysctl::<u64>(c"hw.memsize").unwrap_or(0))
+    }
+
     fn counters() -> RawSystem {
         let mut ticks = [0u32; 4];
         let mut count = 4u32;
@@ -409,16 +459,19 @@ mod mac {
         let mut vm = VmStatistics64::default();
         let mut count = (std::mem::size_of::<VmStatistics64>() / 4) as u32;
         unsafe { host_statistics64(host(), HOST_VM_INFO64, &mut vm as *mut _ as *mut c_int, &mut count) };
-        let page = sysctl::<u64>(c"hw.pagesize").unwrap_or(16_384);
+        let page = page_size();
         let pages = |n: u32| n as u64 * page;
         let app = (vm.internal_page_count as u64).saturating_sub(vm.purgeable_count as u64);
         RawSystem {
             ticks: ticks.map(u64::from),
-            memory_total: sysctl::<u64>(c"hw.memsize").unwrap_or(0),
+            memory_total: memory_size(),
             memory_used: (app + vm.wire_count as u64 + vm.compressor_page_count as u64) * page,
             memory_cached: pages(vm.external_page_count) + pages(vm.purgeable_count),
+            memory_compressed: pages(vm.compressor_page_count),
             swap_used: sysctl::<SwapUsage>(c"vm.swapusage").map_or(0, |s| s.used),
             pressure: sysctl::<i32>(c"kern.memorystatus_vm_pressure_level").unwrap_or(1),
+            thermal: thermal(),
+            cpu_temperature: None,
         }
     }
 
@@ -427,7 +480,7 @@ mod mac {
         if pids.is_empty() {
             return Err("Couldn’t list the processes.".into());
         }
-        let mut names = HashMap::new();
+        let mut names = user_names().lock().unwrap_or_else(|e| e.into_inner());
         let mut paths = paths().lock().unwrap_or_else(|e| e.into_inner());
         let last = std::mem::take(&mut *paths);
         let mut procs = Vec::with_capacity(pids.len());
@@ -439,9 +492,10 @@ mod mac {
             }
         }
         if !others.is_empty() {
-            let mut seen = from_ps();
+            let mut seen = from_ps(&others);
             for pid in others {
                 if let Some(mut p) = seen.remove(&pid) {
+                    p.user = user_name(p.uid, &mut names);
                     // libproc names the executable in full where ps's `comm` may be cut short.
                     let path = known_path(pid, ps_tag(&p), &last, &mut paths);
                     if !path.is_empty() {
@@ -452,7 +506,8 @@ mod mac {
                 }
             }
         }
-        Ok(RawSample { procs, system: counters() })
+        let system = RawSystem { cpu_temperature: crate::sensors::cpu_temperature(), ..counters() };
+        Ok(RawSample { procs, system })
     }
 
     /// SIGTERM, or SIGKILL when forced; the errno when refused.
@@ -481,11 +536,11 @@ mod tests {
 
     #[test]
     fn reads_ps_lines_with_spaces_in_the_command() {
-        let out = "    1     0     0  13264   9:51.23 root             /sbin/launchd\n  412     1   501   2048   0:00.10 anna /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n";
+        let out = "    1     0     0  13264   9:51.23 /sbin/launchd\n  412     1   501   2048   0:00.10 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome\n";
         let procs = parse_ps(out);
         assert_eq!(procs.len(), 2);
         assert_eq!(procs[0].name, "launchd");
-        assert_eq!(procs[0].user, "root");
+        assert_eq!(procs[0].uid, 0);
         assert_eq!(procs[0].memory, 13264 * 1024);
         assert_eq!(procs[0].cpu_ns, 591_230_000_000);
         assert_eq!(procs[1].name, "Google Chrome");
@@ -500,7 +555,8 @@ mod tests {
         let own = sample.procs.iter().find(|p| p.pid == me).expect("this process");
         assert!(own.detailed && own.memory > 0 && own.threads.unwrap_or(0) >= 1);
         // Root's launchd, read through ps.
-        assert!(sample.procs.iter().any(|p| p.pid == 1 && p.name == "launchd"));
+        assert!(sample.procs.iter().any(|p| p.pid == 1 && p.name == "launchd" && p.user == "root"));
+        assert!(sample.system.thermal.is_some_and(|t| t <= 4));
         assert!(sample.system.memory_total > 0 && sample.system.memory_used > 0);
         assert!(sample.system.ticks.iter().sum::<u64>() > 0);
     }

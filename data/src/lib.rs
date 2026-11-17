@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 pub mod icons;
 pub mod sample;
+pub mod sensors;
 pub mod tasks;
 pub mod vitals;
 pub mod walk;

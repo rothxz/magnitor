@@ -187,14 +187,29 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -o pipefail
-          bun "$EXACT/scripts/exact.mjs" release . 2>&1 | tee "$RUNNER_TEMP/release.log"
+          out=target/dist/magnitor
+          if ! bun "$EXACT/scripts/exact.mjs" release . 2>&1 | tee "$RUNNER_TEMP/release.log"; then
+            # `exact release` notarizes the app (as a zip) and staples it, then staples the .dmg it
+            # builds around it, which was never submitted itself: stapler answers "Record not
+            # found" (error 65). With the app notarized and stapled, finish here: sign the .dmg,
+            # notarize and staple it, and zip the stapled app.
+            xcrun stapler validate "$out/Magnitor.app" || exit 1
+            test -f "$out/Magnitor.dmg" || exit 1
+            echo "::notice::Finishing the .dmg after exact release (it staples a .dmg it never notarized)."
+            codesign --force --sign "$EXACT_DEVELOPER_ID" --timestamp "$out/Magnitor.dmg"
+            xcrun notarytool submit "$out/Magnitor.dmg" --keychain-profile "$EXACT_NOTARY_PROFILE" --wait \
+              | tee "$RUNNER_TEMP/notary-dmg.log"
+            grep -q 'status: Accepted' "$RUNNER_TEMP/notary-dmg.log"
+            xcrun stapler staple "$out/Magnitor.dmg"
+            rm -f "$out/Magnitor.zip"
+            ditto -c -k --sequesterRsrc --keepParent "$out/Magnitor.app" "$out/Magnitor.zip"
+            spctl --assess --type execute --verbose=2 "$out/Magnitor.app"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "$out/Magnitor.dmg"
+          fi
           mkdir -p dist-ci
-          grep -E '^[[:space:]]+/.*\.(dmg|zip)$' "$RUNNER_TEMP/release.log" | while read -r file; do
-            ext="${file##*.}"
-            cp "$file" "dist-ci/Magnitor-${TAG}-macos.$ext"
-          done
+          cp "$out/Magnitor.dmg" "dist-ci/Magnitor-${TAG}-macos.dmg"
+          cp "$out/Magnitor.zip" "dist-ci/Magnitor-${TAG}-macos.zip"
           ls -la dist-ci
-          test -n "$(ls dist-ci/*.dmg 2>/dev/null)"
 
       - name: Publish GitHub Release
         env:

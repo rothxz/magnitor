@@ -1,9 +1,14 @@
 # Magnitor macOS CI/CD.
 #
-# - Every push to master and every pull request: build the release app (ad hoc signed) and
-#   upload it as a workflow artifact. UI tests run locally before pushing, not here.
-# - A pushed tag like v1.2.0: also sign with a Developer ID, notarize and staple, then attach
-#   the .dmg and .zip to a GitHub Release.
+# - Every pull request (and a manual run): build the app (ad hoc signed) and upload it as a
+#   workflow artifact. UI tests run locally before pushing, not here.
+# - Every push to master: a DRAFT release. The version is the latest published v* tag with its
+#   patch number raised by one (v0.1.3 -> v0.1.4; v0.0.1 when there is none yet). The app is
+#   built, signed with a Developer ID, notarized and stapled, and the .dmg and .zip are attached
+#   to a draft GitHub Release. Each push replaces the pending draft, so there is one, from the
+#   newest master. Nobody gets it until you press Publish on the draft: the updater reads only
+#   published releases. Pushes that change only Markdown or screenshots don't build a draft.
+# - A pushed tag like v1.2.0: publish exactly that version at once (for a minor or major bump).
 #
 # Release signing: add these repository secrets (Settings > Secrets and variables > Actions):
 #   MACOS_DEVELOPER_ID_P12           base64 of a "Developer ID Application" certificate + key (.p12)
@@ -20,6 +25,10 @@ on:
   push:
     branches: [master]
     tags: ['v*']
+    # Not evaluated for tag pushes, which always release.
+    paths-ignore:
+      - '**.md'
+      - 'assets/screenshot*.png'
   pull_request:
   workflow_dispatch:
 
@@ -38,6 +47,8 @@ env:
 jobs:
   build:
     name: Build
+    # A push releases instead, and the release builds the app itself.
+    if: github.event_name != 'push'
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -95,14 +106,34 @@ jobs:
 
   release:
     name: Sign, notarize and publish
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    # A push to master or of a v* tag (the workflow's only push triggers).
+    if: github.event_name == 'push'
     runs-on: macos-26
     timeout-minutes: 90
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Pick the version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            last=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+            if [ -z "$last" ]; then
+              tag="v0.0.1"
+            else
+              IFS=. read -r major minor patch <<< "${last#v}"
+              tag="v${major}.${minor:-0}.$(( ${patch%%[!0-9]*} + 1 ))"
+            fi
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag"
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -152,14 +183,15 @@ jobs:
       - name: Sign, notarize and package
         env:
           EXACT_BUILD_NUMBER: ${{ github.run_number }}
+          EXACT_VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -o pipefail
-          export EXACT_VERSION="${GITHUB_REF_NAME#v}"
           bun "$EXACT/scripts/exact.mjs" release . 2>&1 | tee "$RUNNER_TEMP/release.log"
           mkdir -p dist-ci
           grep -E '^[[:space:]]+/.*\.(dmg|zip)$' "$RUNNER_TEMP/release.log" | while read -r file; do
             ext="${file##*.}"
-            cp "$file" "dist-ci/Magnitor-${GITHUB_REF_NAME}-macos.$ext"
+            cp "$file" "dist-ci/Magnitor-${TAG}-macos.$ext"
           done
           ls -la dist-ci
           test -n "$(ls dist-ci/*.dmg 2>/dev/null)"
@@ -167,11 +199,23 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        # A tag push publishes. A master push makes a draft, replacing the draft an earlier push
+        # left: a draft has no git tag until it is published, so each push picks the same next
+        # version. Publishing a draft creates its tag at the commit it was built from; a tag made
+        # with the workflow's own token starts no new run.
         run: |
-          gh release create "$GITHUB_REF_NAME" dist-ci/* \
-            --title "Magnitor $GITHUB_REF_NAME" \
-            --generate-notes \
-            --verify-tag
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            gh release create "$TAG" dist-ci/* --title "Magnitor $TAG" --generate-notes --verify-tag
+          else
+            for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+                --jq '.[] | select(.draft and (.name | startswith("Magnitor v"))) | .id'); do
+              echo "Replacing an earlier draft ($id)"
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            done
+            gh release create "$TAG" dist-ci/* --draft --target "$GITHUB_SHA" \
+              --title "Magnitor $TAG" --generate-notes
+          fi
 
       - name: Remove signing keychain
         if: always()

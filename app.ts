@@ -139,6 +139,14 @@ const sources: TypeScriptSources = {
       return { ok: false };
     }
   },
+  // Updates, from modules/apple/Updater.swift: the latest GitHub release, and installing it.
+  // Hosts without the native module (the web) have nothing to update.
+  checkUpdate: async (_args, _store, _storage, native): Promise<Result<'checkUpdate'>> =>
+    native?.available ? (await native.later({ op: 'check' })) as Result<'checkUpdate'> : NO_UPDATE,
+  installUpdate: async ([url, version], _store, _storage, native): Promise<Result<'installUpdate'>> =>
+    native?.available
+      ? (await native.later({ op: 'install', url, version })) as Result<'installUpdate'>
+      : { ok: false, message: 'Updates are installed by the Mac app.' },
   // The desktop widget's one entry: the app's last reading, or a note to open the app.
   widgetVitals: async ([date], _store, storage): Promise<Result<'widgetVitals'>> => {
     let props: WidgetProps = NO_READING;
@@ -149,6 +157,10 @@ const sources: TypeScriptSources = {
     }
     return [{ date, props }];
   },
+};
+
+const NO_UPDATE: Result<'checkUpdate'> = {
+  current: '', latest: '', available: false, notes: '', page: '', download: '', canInstall: false, error: '',
 };
 
 type WidgetProps = Result<'widgetVitals'>[number]['props'];

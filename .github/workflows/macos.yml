@@ -1,0 +1,171 @@
+# Magnitor macOS CI/CD.
+#
+# - Every push to master and every pull request: run the UI tests on macOS, build the release
+#   app (ad hoc signed) and upload it as a workflow artifact.
+# - A pushed tag like v1.2.0: also sign with a Developer ID, notarize and staple, then attach
+#   the .dmg and .zip to a GitHub Release.
+#
+# Release signing: add these repository secrets (Settings > Secrets and variables > Actions):
+#   MACOS_DEVELOPER_ID_P12           base64 of a "Developer ID Application" certificate + key (.p12)
+#   MACOS_DEVELOPER_ID_P12_PASSWORD  the .p12's password
+#   APPLE_ID                         the Apple ID that notarizes
+#   APPLE_TEAM_ID                    the 10-character team ID
+#   APPLE_APP_PASSWORD               an app-specific password for that Apple ID
+#   MACOS_PROVISION_PROFILE          (optional) base64 Developer ID provisioning profile for the
+#                                    desktop widget's App Group
+name: macOS
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+env:
+  # The Exact commit this app builds against. Bump it when you move to a newer Exact.
+  EXACT_REF: a54f4234f8452deb46aaca7975f76f26f3f42923
+  BUN_VERSION: 1.4.2
+
+jobs:
+  build:
+    name: Test and build
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Cargo downloads and Hermes
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/hermes-lean-sys
+            ~/.cache/exact
+          key: macos-cargo-${{ runner.arch }}-${{ env.EXACT_REF }}
+          restore-keys: macos-cargo-${{ runner.arch }}-
+
+      - name: Prepare Exact and Rust
+        run: sh .ci/prepare-macos.sh
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check toolchain
+        run: bun "$EXACT/scripts/exact.mjs" setup --check --platform macos
+        continue-on-error: true
+
+      - name: Run UI tests
+        env:
+          EXACT_IDENTITY: '-'
+        run: bun exact.mjs test macos
+
+      - name: Build release app
+        id: build
+        env:
+          EXACT_IDENTITY: '-'
+          EXACT_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          bun exact.mjs mac --release --json > "$RUNNER_TEMP/build.json"
+          app=$(bun -e '
+            const lines = (await Bun.file(process.argv[1]).text()).trim().split("\n");
+            const result = JSON.parse(lines.at(-1));
+            const path = Object.values(result).find((v) => typeof v === "string" && v.endsWith(".app"));
+            if (!path) { console.error(JSON.stringify(result)); process.exit(1); }
+            console.log(path);
+          ' "$RUNNER_TEMP/build.json")
+          echo "Built $app"
+          mkdir -p dist-ci
+          ditto -c -k --sequesterRsrc --keepParent "$app" "dist-ci/Magnitor-${GITHUB_SHA::7}-macos-adhoc.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Magnitor-macos-${{ github.sha }}
+          path: dist-ci/*.zip
+          retention-days: 14
+
+  release:
+    name: Sign, notarize and publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: macos-26
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Cargo downloads and Hermes
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/hermes-lean-sys
+            ~/.cache/exact
+          key: macos-cargo-${{ runner.arch }}-${{ env.EXACT_REF }}
+          restore-keys: macos-cargo-${{ runner.arch }}-
+
+      - name: Prepare Exact and Rust
+        run: sh .ci/prepare-macos.sh
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Import Developer ID and notary credentials
+        env:
+          MACOS_DEVELOPER_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          MACOS_PROVISION_PROFILE: ${{ secrets.MACOS_PROVISION_PROFILE }}
+        run: sh .ci/import-developer-id.sh
+
+      - name: Sign, notarize and package
+        env:
+          EXACT_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          export EXACT_VERSION="${GITHUB_REF_NAME#v}"
+          bun "$EXACT/scripts/exact.mjs" release . 2>&1 | tee "$RUNNER_TEMP/release.log"
+          mkdir -p dist-ci
+          grep -E '^[[:space:]]+/.*\.(dmg|zip)$' "$RUNNER_TEMP/release.log" | while read -r file; do
+            ext="${file##*.}"
+            cp "$file" "dist-ci/Magnitor-${GITHUB_REF_NAME}-macos.$ext"
+          done
+          ls -la dist-ci
+          test -n "$(ls dist-ci/*.dmg 2>/dev/null)"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist-ci/* \
+            --title "Magnitor $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          if [ -n "${CI_KEYCHAIN:-}" ]; then security delete-keychain "$CI_KEYCHAIN" || true; fi
+          rm -rf "$RUNNER_TEMP/signing"

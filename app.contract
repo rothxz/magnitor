@@ -150,6 +150,21 @@ shape WidgetEntry
 shape Clock
   epochAtZero: number
 
+// The latest release on GitHub, as modules/apple/Updater.swift reads it.
+shape UpdateInfo
+  current: string
+  latest: string
+  available: bool
+  notes: string
+  page: string
+  download: string
+  canInstall: bool
+  error: string
+
+shape UpdateInstall
+  ok: bool
+  message: string
+
 // The desktop widget's reading (app.json's `widgets`).
 shape VitalsWidgetProps
   // "all", "system" (CPU and memory) or "disk".
@@ -299,6 +314,20 @@ component Magnitor
   state diskLimit = 10 persist
   // How long, in seconds, CPU or memory stays over its limit before an alert.
   state sustain = 60 persist
+  // Whether the main window checks GitHub for a new version, at launch and every six hours.
+  state autoUpdate = true persist
+
+  // Updates: asked afresh each launch (the clock's epoch differs) and at each pulse. The
+  // Settings window asks when it opens, and on Check Now.
+  state updatePulse = 0
+  state updating = false
+  state updateNote = ""
+  resource update = checkUpdate(updatePulse) with clock.epochAtZero when (isMain and autoUpdate) or inWindow or top(nav).name == "settings" or updatePulse > 0 as shape UpdateInfo else empty()
+  mutation updateInstalled as shape UpdateInstall then afterInstall
+  task updateTimer when isMain and autoUpdate
+    every(21600000, recheckUpdate)
+  derive updateStatus = not current(update) ? "Checking for updates…" : update.error != "" ? update.error : update.available ? `Magnitor ${update.latest} is available. You have ${update.current}.` : update.current != "" ? `Magnitor ${update.current} is up to date.` : ""
+  derive updateFooter = updateNote != "" ? updateNote : update.available and not update.canInstall ? "This copy can’t update itself. Download the new version from Magnitor’s GitHub releases." : autoUpdate ? "Magnitor checks GitHub for a new version at launch and every six hours." : "Magnitor checks for a new version only when you ask."
 
   // Recording a shortcut in Settings, and why a press made none.
   state recording = false
@@ -410,6 +439,22 @@ component Magnitor
     diskLimit = number(v)
   action setSustain(v: string)
     sustain = number(v)
+  action setAutoUpdate(on: bool)
+    autoUpdate = on
+  action recheckUpdate
+    updatePulse = updatePulse + 1
+    updateNote = ""
+  action installUpdate
+    updating = true
+    updateNote = ""
+    send updateInstalled = installUpdate(update.download, update.latest)
+  action afterInstall
+    match updateInstalled
+      case some(r)
+        updateNote = r.message
+        updating = r.ok
+      case none
+        updating = false
   action testAlert
     showNotification(title="Magnitor alerts are on", body="This is how Magnitor tells you when your Mac crosses a limit you set.", tag="test")
   // Each pulse: the reading from the last one is checked against the limits, and the widget's
@@ -770,7 +815,11 @@ component Magnitor
             row padding-left=8 padding-right=12 padding-top=4 padding-bottom=10 align-items="center"
               link href="/settings" target="settings" aria-keyshortcuts="Meta+," aria-label="Settings" padding=4 border-radius=6 color="-exact-secondary-label" testId="open-settings"
                 image "symbol:settings"
-              column flex=1
+              column flex=1 align-items="center"
+                // A new version that this copy can install: Settings has Install and Relaunch.
+                if update.available and update.canInstall
+                  link href="/settings" target="settings" padding=4 testId="update-available"
+                    text `Update to ${update.latest}` font="-exact-footnote" font-weight=600 color="-exact-system-blue"
               button press=quit aria-keyshortcuts="Meta+Q" padding=4 testId="quit"
                 text "Quit Magnitor" font="-exact-footnote" color="-exact-secondary-label"
         if e.name == "settings"
@@ -862,6 +911,22 @@ component Magnitor
                     text "Send Test Notification"
                 footer
                   text alertsNote testId="alerts-note"
+              section
+                header
+                  text "Updates"
+                row
+                  text "Check Automatically"
+                  input type="checkbox" switch checked=autoUpdate change=setAutoUpdate aria-label="Check for Updates Automatically" testId="update-auto"
+                row
+                  text updateStatus flex=1 testId="update-status"
+                  if update.available and update.canInstall
+                    button press=installUpdate disabled=updating buttonStyle="filled" testId="update-install"
+                      text (updating ? "Installing…" : "Install and Relaunch")
+                  else
+                    button press=recheckUpdate disabled=(not current(update)) testId="update-check"
+                      text "Check Now"
+                footer
+                  text updateFooter testId="update-note"
 
 // A label and its value, a row of the process inspector.
 component Field

@@ -8,6 +8,7 @@
 
 Live CPU, memory and thermal readings, a searchable process list, and a disk-space breakdown, all in a native macOS menu bar app.
 
+[![macOS build](https://github.com/rothxz/magnitor/actions/workflows/macos.yml/badge.svg)](https://github.com/rothxz/magnitor/actions/workflows/macos.yml)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-data%20engine-B7410E?logo=rust&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-sources-3178C6?logo=typescript&logoColor=white)
@@ -40,6 +41,7 @@ Live CPU, memory and thermal readings, a searchable process list, and a disk-spa
 - **Alerts:** get notified when CPU or memory stays above a threshold for a set time, or when free disk space drops too low.
 - **Desktop widget:** small and medium widgets with CPU, memory pressure and free disk space.
 - **Global keyboard shortcut:** open Magnitor from anywhere.
+- **Automatic updates:** checks GitHub Releases at launch and every six hours, then installs and relaunches in one click. Each update is verified against Magnitor's own Developer ID signature before it replaces the app.
 
 ## Requirements
 
@@ -55,7 +57,7 @@ Run `bun ../exact/scripts/exact.mjs setup --check` to see what a native build st
 ## Getting started
 
 ```bash
-git clone https://github.com/rothxz/storage.git magnitor
+git clone https://github.com/rothxz/magnitor.git
 cd magnitor
 bun install
 

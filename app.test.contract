@@ -340,3 +340,22 @@ test "the widget shows the last reading, as Settings previews it"
   clock data
   expect tree missing "widget-cpu"
   expect text "widget-disk" == "512 GB free"
+
+// Updates: under the agent the updater answers with this build's version and reaches no
+// network, so a test build (0.1.0, ad hoc) is up to date and offers no install.
+test "Settings says the build is up to date, checks again on Check Now, and keeps Check Automatically"
+  at "/settings"
+  clock data
+  expect text "update-status" == "Magnitor 0.1.0 is up to date."
+  expect text "update-note" == "Magnitor checks GitHub for a new version at launch and every six hours."
+  expect tree missing "update-install"
+  expect tree missing "update-available"
+  tap "update-auto"
+  expect state autoUpdate == false
+  expect text "update-note" == "Magnitor checks for a new version only when you ask."
+  tap "update-check"
+  clock data
+  expect state updatePulse == 1
+  expect text "update-status" == "Magnitor 0.1.0 is up to date."
+  reload
+  expect state autoUpdate == false

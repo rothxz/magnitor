@@ -162,7 +162,7 @@ test "Activity Monitor reads again while it is open"
   clock settle
   tap "tab-tasks"
   clock data
-  clock +2100 real
+  clock +3100 real
   clock data
   expect state tick >= 1
   expect state tasks.error == ""

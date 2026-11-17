@@ -1,21 +1,27 @@
 //! Each app's icon for the process list, as a PNG data URL: Info.plist names its .icns (AppIcon
 //! when it doesn't), which `sips` draws as a 64-pixel PNG. An app with no .icns has the generic
-//! app icon. Each app's is made once and kept; "" when none could be drawn.
+//! app icon. Each app's is made once and kept: in memory for this run, and on disk in
+//! Magnitor's own cache folder for the next, so opening the popover after a launch spawns no
+//! `plutil` or `sips` for an app already drawn. "" when none could be drawn.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 const GENERIC: &str = "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns";
+/// Magnitor's own folder in Library/Caches, which Clear Cache leaves alone (app.ts's `OWN_CACHE`).
+const OWN_CACHE: &str = "com.example.magnitor-addab7";
 
 fn cache() -> &'static Mutex<HashMap<String, String>> {
     static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
-/// The icons of `apps` ("" for a process outside an app), in order. Apps not yet drawn are
-/// drawn together, each on its own thread.
+/// The icons of `apps` ("" for a process outside an app), in order. Apps not yet known are
+/// read from disk or drawn together, each on its own thread.
 pub fn icons(apps: &[String]) -> Vec<String> {
     let missing: Vec<&String> = {
         let known = cache().lock().unwrap();
@@ -33,7 +39,45 @@ pub fn icons(apps: &[String]) -> Vec<String> {
     apps.iter().map(|a| known.get(a).cloned().unwrap_or_default()).collect()
 }
 
+/// The app's icon as a data URL: the one kept on disk, or drawn now and kept.
 fn app_icon(app: &str) -> String {
+    let kept = kept_path(app);
+    let png = match kept.as_ref().and_then(|p| std::fs::read(p).ok()).filter(|b| is_png(b)) {
+        Some(png) => Some(png),
+        None => {
+            let png = draw_app(app);
+            if let (Some(path), Some(png)) = (&kept, &png) {
+                keep(path, png);
+            }
+            png
+        }
+    };
+    png.map(|b| format!("data:image/png;base64,{}", base64(&b))).unwrap_or_default()
+}
+
+/// Where the app's icon is kept: named by its path and its Info.plist's modification time, so
+/// an updated app is drawn afresh. The person's home always, never the agent's stand-in.
+fn kept_path(app: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let modified = std::fs::metadata(format!("{app}/Contents/Info.plist")).ok()?.modified().ok()?;
+    let secs = modified.duration_since(UNIX_EPOCH).ok()?.as_secs();
+    Some(PathBuf::from(home).join("Library/Caches").join(OWN_CACHE).join("icons").join(format!("{:016x}-{secs}.png", fnv1a(app.as_bytes()))))
+}
+
+/// Written whole, then renamed into place, so a reader never sees half an icon. Best effort:
+/// an icon that can't be kept is drawn again next launch.
+fn keep(path: &PathBuf, png: &[u8]) {
+    let Some(dir) = path.parent() else { return };
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let partial = path.with_extension(format!("{}.part", std::process::id()));
+    if std::fs::write(&partial, png).is_ok() && std::fs::rename(&partial, path).is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+}
+
+fn draw_app(app: &str) -> Option<Vec<u8>> {
     let name = Command::new("/usr/bin/plutil")
         .args(["-extract", "CFBundleIconFile", "raw", &format!("{app}/Contents/Info.plist")])
         .stderr(Stdio::null())
@@ -44,10 +88,10 @@ fn app_icon(app: &str) -> String {
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "AppIcon".into());
     let file = if name.ends_with(".icns") { name } else { format!("{name}.icns") };
-    draw(&format!("{app}/Contents/Resources/{file}")).or_else(|| draw(GENERIC)).unwrap_or_default()
+    draw(&format!("{app}/Contents/Resources/{file}")).or_else(|| draw(GENERIC))
 }
 
-fn draw(icns: &str) -> Option<String> {
+fn draw(icns: &str) -> Option<Vec<u8>> {
     static COUNT: AtomicUsize = AtomicUsize::new(0);
     let out = std::env::temp_dir().join(format!("magnitor-icon-{}-{}.png", std::process::id(), COUNT.fetch_add(1, Ordering::Relaxed)));
     let ok = Command::new("/usr/bin/sips")
@@ -59,7 +103,16 @@ fn draw(icns: &str) -> Option<String> {
         .is_ok_and(|s| s.success());
     let bytes = if ok { std::fs::read(&out).ok() } else { None };
     let _ = std::fs::remove_file(&out);
-    bytes.filter(|b| b.starts_with(b"\x89PNG")).map(|b| format!("data:image/png;base64,{}", base64(&b)))
+    bytes.filter(|b| is_png(b))
+}
+
+fn is_png(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\x89PNG")
+}
+
+/// FNV-1a: the same name for the same app on every launch and Rust version.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
 }
 
 pub fn base64(bytes: &[u8]) -> String {
@@ -82,5 +135,11 @@ mod tests {
         assert_eq!(super::base64(b"Man"), "TWFu");
         assert_eq!(super::base64(b"Ma"), "TWE=");
         assert_eq!(super::base64(b"M"), "TQ==");
+    }
+
+    #[test]
+    fn fnv1a_is_stable() {
+        assert_eq!(super::fnv1a(b""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(super::fnv1a(b"a"), 0xaf63_dc4c_8601_ec8c);
     }
 }

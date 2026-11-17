@@ -5,6 +5,10 @@
   "id": "com.example.magnitor-addab7",
   "start_url": "/",
   "display": "standalone",
+  "icons": [
+    { "src": "assets/icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
   "app": {
     "id": "com.example.magnitor-addab7",
     "name": "Magnitor"

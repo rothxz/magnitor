@@ -14,12 +14,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// Rows the list shows; a search finds the rest.
 pub const SHOWN: usize = 50;
-/// CPU readings the graph keeps: two minutes at the view's two seconds.
-const HISTORY: usize = 60;
+/// CPU readings the graph keeps: two minutes at the view's three seconds.
+const HISTORY: usize = 40;
 /// A reading older than this is no base for a rate.
 const STALE: Duration = Duration::from_secs(10);
-/// The gap between the first reading and the second.
-const SETTLE: Duration = Duration::from_millis(300);
+/// The gap between the first reading and the second. It falls while the popover opens, the
+/// app's own busiest moment: a short gap would show Magnitor's own % CPU many times its average.
+const SETTLE: Duration = Duration::from_millis(1000);
 
 /// A process with its rate.
 #[derive(Clone, Debug, PartialEq)]
@@ -430,9 +431,9 @@ mod tests {
     fn graphs_system_under_user_with_the_newest_at_the_right() {
         let history: VecDeque<Load> = [Load { user: 0.5, system: 0.25 }, Load { user: 0.0, system: 0.0 }].into();
         let (user, system) = graph(&history);
-        // Two readings: the last two of sixty slots.
-        assert_eq!(system, "M 137.6 44.0 L 137.6 33.0 L 140.0 44.0 L 140.0 44.0 Z");
-        assert_eq!(user, "M 137.6 11.0 L 140.0 44.0 L 140.0 44.0 L 137.6 33.0 Z");
+        // Two readings: the last two of forty slots.
+        assert_eq!(system, "M 136.4 44.0 L 136.4 33.0 L 140.0 44.0 L 140.0 44.0 Z");
+        assert_eq!(user, "M 136.4 11.0 L 140.0 44.0 L 140.0 44.0 L 136.4 33.0 Z");
         assert_eq!(graph(&VecDeque::new()), (String::new(), String::new()));
     }
 }

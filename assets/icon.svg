@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60A5FA"/>
+      <stop offset="0.5" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.3" cy="0.15" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+    <filter id="drop" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="20"/>
+    </filter>
+    <filter id="lineShadow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <!-- shadow under the tile -->
+  <rect x="120" y="140" width="784" height="784" rx="175" fill="#0B1B4D" opacity="0.45" filter="url(#drop)"/>
+
+  <!-- tile -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#body)"/>
+
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#sheen)"/>
+
+    <!-- light gray grid -->
+    <g stroke="#E5E7EB" stroke-width="4" opacity="0.22">
+      <path d="M100 265H924M100 430H924M100 595H924M100 760H924"/>
+      <path d="M265 100V924M430 100V924M595 100V924M760 100V924"/>
+    </g>
+
+    <!-- the heartbeat as an M: a soft shadow, then the white line -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M100 628H300L372 300L512 540L652 300L724 628H770"
+            stroke="#0B1B4D" stroke-width="62" opacity="0.35" filter="url(#lineShadow)" transform="translate(0 14)"/>
+      <path d="M100 628H300L372 300L512 540L652 300L724 628H770"
+            stroke="#FFFFFF" stroke-width="62"/>
+    </g>
+
+    <!-- ping at the end of the line -->
+    <circle cx="804" cy="628" r="70" fill="none" stroke="#FFFFFF" stroke-width="10" opacity="0.35"/>
+    <circle cx="804" cy="628" r="108" fill="none" stroke="#FFFFFF" stroke-width="6" opacity="0.15"/>
+    <circle cx="804" cy="628" r="38" fill="#FFFFFF"/>
+  </g>
+
+  <!-- inner rim -->
+  <rect x="103" y="103" width="818" height="818" rx="182" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="6"/>
+</svg>

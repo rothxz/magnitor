@@ -265,8 +265,9 @@ component Magnitor
   resource tasks = tasks(tick, sort, query) when isMain and tab == "tasks" as shape Tasks else empty()
   resource info = process(inspected, tick) when tab == "tasks" and inspected != -1 as shape ProcInfo else empty()
   mutation ended as shape Ended then afterEnd
+  // Every three seconds: each reading lists every process and redraws the list.
   task sampler when tab == "tasks" and shown
-    every(2000, sample)
+    every(3000, sample)
 
   resource page = exactPage() as shape Page
   // The date now is the clock's epoch at zero plus performanceNow().
@@ -313,8 +314,9 @@ component Magnitor
   state widgetAt = 0
   state widgetShown = ""
   derive watching = isMain and (trayShow != "icon" or alertsOn or widgetOn)
-  // Every two seconds while the menu bar shows the load or Activity Monitor is open; five otherwise.
-  derive quick = trayShow != "icon" or (tab == "tasks" and shown)
+  // Every two seconds while the menu bar shows the load; five otherwise (Activity Monitor reads
+  // its own load each tick, so an open popover needs no quicker watch).
+  derive quick = trayShow != "icon"
   resource vitals = vitals(pulse) when watching as shape Vitals else empty()
   mutation widgetSaved as shape Saved refreshes widgetNow
   // What the widget shows now, previewed in Settings: its own refresh, which reads the last

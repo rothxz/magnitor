@@ -303,6 +303,24 @@ mod mac {
             .clone()
     }
 
+    /// Each process's executable path from the last reading, by pid, with the tag it was read
+    /// for (its start time, or its `ps` command): a path never changes while a process runs, so
+    /// a reading looks up only the processes that are new since the last.
+    fn paths() -> &'static std::sync::Mutex<HashMap<i32, (u64, String)>> {
+        static PATHS: std::sync::OnceLock<std::sync::Mutex<HashMap<i32, (u64, String)>>> = std::sync::OnceLock::new();
+        PATHS.get_or_init(Default::default)
+    }
+
+    /// `pid`'s path, from `last` when it was read for the same `tag`; kept in `next`.
+    fn known_path(pid: i32, tag: u64, last: &HashMap<i32, (u64, String)>, next: &mut HashMap<i32, (u64, String)>) -> String {
+        let path = match last.get(&pid) {
+            Some((t, path)) if *t == tag => path.clone(),
+            _ => pid_path(pid),
+        };
+        next.insert(pid, (tag, path.clone()));
+        path
+    }
+
     fn pid_path(pid: i32) -> String {
         let mut buffer = [0u8; 4096];
         let n = unsafe { proc_pidpath(pid, buffer.as_mut_ptr() as *mut c_void, buffer.len() as u32) };
@@ -327,7 +345,7 @@ mod mac {
     }
 
     /// A process this user may read in full; `None` when the kernel refuses (another user's).
-    fn detailed(pid: i32, names: &mut HashMap<u32, String>) -> Option<RawProc> {
+    fn detailed(pid: i32, names: &mut HashMap<u32, String>, last: &HashMap<i32, (u64, String)>, next: &mut HashMap<i32, (u64, String)>) -> Option<RawProc> {
         let mut all = TaskAllInfo::default();
         let size = std::mem::size_of::<TaskAllInfo>() as c_int;
         if unsafe { proc_pidinfo(pid, PROC_PIDTASKALLINFO, 0, &mut all as *mut _ as *mut c_void, size) } != size {
@@ -340,7 +358,7 @@ mod mac {
         } else {
             all.task.resident_size
         };
-        let path = pid_path(pid);
+        let path = known_path(pid, all.bsd.start_tvsec, last, next);
         let name = if !path.is_empty() {
             base_name(&path).to_owned()
         } else if all.bsd.name[0] != 0 {
@@ -362,6 +380,14 @@ mod mac {
             started: all.bsd.start_tvsec,
             detailed: true,
         })
+    }
+
+    /// A `ps` process's tag for its path: its command, which a new process on a reused pid changes.
+    fn ps_tag(p: &RawProc) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (&p.name, &p.path, p.ppid, p.uid).hash(&mut h);
+        h.finish()
     }
 
     /// Every process `ps` sees, for those libproc won't describe.
@@ -402,10 +428,12 @@ mod mac {
             return Err("Couldn’t list the processes.".into());
         }
         let mut names = HashMap::new();
+        let mut paths = paths().lock().unwrap_or_else(|e| e.into_inner());
+        let last = std::mem::take(&mut *paths);
         let mut procs = Vec::with_capacity(pids.len());
         let mut others = Vec::new();
         for pid in pids {
-            match detailed(pid, &mut names) {
+            match detailed(pid, &mut names, &last, &mut paths) {
                 Some(p) => procs.push(p),
                 None => others.push(pid),
             }
@@ -415,7 +443,7 @@ mod mac {
             for pid in others {
                 if let Some(mut p) = seen.remove(&pid) {
                     // libproc names the executable in full where ps's `comm` may be cut short.
-                    let path = pid_path(pid);
+                    let path = known_path(pid, ps_tag(&p), &last, &mut paths);
                     if !path.is_empty() {
                         p.name = base_name(&path).to_owned();
                         p.path = path;

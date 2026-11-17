@@ -12,7 +12,8 @@
 #   APPLE_TEAM_ID                    the 10-character team ID
 #   APPLE_APP_PASSWORD               an app-specific password for that Apple ID
 #   MACOS_PROVISION_PROFILE          (optional) base64 Developer ID provisioning profile for the
-#                                    desktop widget's App Group
+#                                    desktop widget's App Group. Without it, releases leave out
+#                                    the widget.
 name: macOS
 
 on:
@@ -139,6 +140,19 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           MACOS_PROVISION_PROFILE: ${{ secrets.MACOS_PROVISION_PROFILE }}
         run: sh .ci/import-developer-id.sh
+
+      # The desktop widget needs a Developer ID provisioning profile for its App Group. Until
+      # MACOS_PROVISION_PROFILE is set, releases ship without the widget. Local builds keep it.
+      - name: Leave out the widget (no provisioning profile)
+        if: env.EXACT_MAC_PROFILE == ''
+        run: |
+          bun -e '
+            const file = "app.json";
+            const manifest = JSON.parse(await Bun.file(file).text());
+            delete manifest.widgets;
+            await Bun.write(file, JSON.stringify(manifest, null, 2) + "\n");
+          '
+          echo "::notice::Released without the desktop widget: add the MACOS_PROVISION_PROFILE secret to include it."
 
       - name: Sign, notarize and package
         env:

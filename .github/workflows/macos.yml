@@ -1,7 +1,7 @@
 # Magnitor macOS CI/CD.
 #
-# - Every push to master and every pull request: run the UI tests on macOS, build the release
-#   app (ad hoc signed) and upload it as a workflow artifact.
+# - Every push to master and every pull request: build the release app (ad hoc signed) and
+#   upload it as a workflow artifact. UI tests run locally before pushing, not here.
 # - A pushed tag like v1.2.0: also sign with a Developer ID, notarize and staple, then attach
 #   the .dmg and .zip to a GitHub Release.
 #
@@ -37,7 +37,7 @@ env:
 
 jobs:
   build:
-    name: Test and build
+    name: Build
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -68,11 +68,6 @@ jobs:
       - name: Check toolchain
         run: bun "$EXACT/scripts/exact.mjs" setup --check --platform macos
         continue-on-error: true
-
-      - name: Run UI tests
-        env:
-          EXACT_IDENTITY: '-'
-        run: bun exact.mjs test macos
 
       - name: Build release app
         id: build

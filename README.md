@@ -34,7 +34,6 @@ Live CPU, memory and thermal readings, a searchable process list, and a disk-spa
 ### Storage
 - **Where the space went:** a pie chart of your home folder by size, measured on a thread per core so large folders don't stall the UI.
 - **Drill down:** open any folder to see what it holds, or **Show in Finder**.
-- **Clear Cache:** move `~/Library/Caches` and Xcode's DerivedData to the Trash in one step. Items that are in use are skipped.
 
 ### Always on
 - **Menu bar icon:** choose Waveform, Gauge, Chip, Memory, Disk or Pie Chart, and choose what the menu bar item shows.
@@ -84,7 +83,7 @@ Magnitor is built with **Exact**: a declarative view and a typed contract, backe
 ```
 app.contract        The UI: menu bar popover, tabs, settings and the widget
 app.ts              TypeScript sources: disk size (df), app names (Spotlight),
-                    Clear Cache (trash), Show in Finder (open), widget state
+                    Show in Finder (open), widget state
 data/               Rust crate `magnitor-data`, running on its own worker thread
   src/walk.rs         Parallel folder walk for the Storage tab
   src/tasks.rs        Process list, details and quit/force quit
@@ -99,7 +98,7 @@ The heavy work (walking many gigabytes of folders and sampling processes) runs i
 
 ### Privacy
 
-Magnitor runs entirely on your Mac and makes no network requests. Its permissions are declared up front in [`app.ts`](app.ts): it can run only `df`, `trash`, `mdfind`, `mdls` and `open`, read your cache folders, and send notifications.
+Magnitor runs entirely on your Mac and makes no network requests. Its permissions are declared up front in [`app.ts`](app.ts): it can run only `df`, `mdfind`, `mdls` and `open`, and send notifications.
 
 ## Contributing
 

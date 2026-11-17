@@ -1,7 +1,7 @@
 // Magnitor: the view. Two tabs under a segmented control: Activity Monitor (processes, CPU
 // and memory, after the Mac's own) and Storage. The Rust crate in data/ measures the folders and lists what is
 // in each, walking them on many threads, and reads the processes, CPU and memory; app.ts
-// answers the disk's size, the apps' names, Clear Cache and Show in Finder. On macOS the app lives in the menu bar (app.json's
+// answers the disk's size, the apps' names and Show in Finder. On macOS the app lives in the menu bar (app.json's
 // `accessory`) and shows no window: the status item opens the `stats` popover,
 // AppKit's NSPopover pointing at the item, with the system's material (Liquid
 // Glass on macOS 26 and later). A folder's row opens its contents in the popover.
@@ -62,10 +62,6 @@ shape Contents
   total: string
   items: Item[]
   error: string
-
-shape Cleared
-  ok: bool
-  message: string
 
 shape Revealed
   ok: bool
@@ -264,8 +260,6 @@ component Magnitor
   // Whether the popover is open: Activity Monitor reads the machine only while it is seen.
   state shown = false
   state generation = 0
-  state confirming = false
-  state notice = ""
   // The folder whose contents the popover shows; "" for the overview.
   state opened = ""
   // The Settings window draws Settings alone, so the folders are measured in the main one.
@@ -275,7 +269,6 @@ component Magnitor
   resource disk = disk(generation, diskPulse) when isMain as shape Disk else empty()
   // Asked with no folders at launch, which loads Spotlight's list ahead of App caches.
   resource names = appNamesFor(cacheFolders) when isMain as shape AppName[] else empty()
-  mutation cleared as shape Cleared then afterClear
   mutation revealed as shape Revealed
   // Activity Monitor: a reading each tick, sorted and searched in Rust.
   state tick = 0
@@ -382,7 +375,10 @@ component Magnitor
   // Shown from the first reading of this process on; a tick's re-reading keeps it on screen.
   derive infoReady = info.pid == inspected
 
+  // The popover first: AppKit's popover is a window of its own, and while it stays open the
+  // app's last window has not closed, so the quit would wait for a click that dismisses it.
   action quit
+    hidePopover("stats")
     close()
   action follow(url: string)
     nav = go(nav, url)
@@ -490,7 +486,7 @@ component Magnitor
       if alertsOn and diskLimit > 0 and disk.freeBytes < diskLimit * 1000000000
         if not diskAlerted
           diskAlerted = true
-          showNotification(title="Your disk is almost full", body=`Only ${disk.free} is free. Open Magnitor to see what’s using the space and clear caches.`, tag="disk")
+          showNotification(title="Your disk is almost full", body=`Only ${disk.free} is free. Open Magnitor to see what’s using the space.`, tag="disk")
       else if disk.freeBytes > diskLimit * 1200000000 or not alertsOn
         diskAlerted = false
     if widgetOn and vitals.pressure != "" and (widgetAt == 0 or now - widgetAt >= 60000 or widgetShown != widgetShows)
@@ -536,27 +532,10 @@ component Magnitor
     generation = generation + 1
   action openFolder(id: string)
     opened = id
-    confirming = false
   action back
     opened = ""
   action showInFinder(path: string)
     send revealed = reveal(path)
-  action askClear
-    confirming = true
-    notice = ""
-  action cancelClear
-    confirming = false
-  action clear
-    confirming = false
-    send cleared = clearCache()
-  action afterClear
-    match cleared
-      case some(r)
-        notice = r.message
-        // Measured afresh: the Rust source keeps each generation's walk.
-        generation = generation + 1
-      case none
-        notice = ""
 
   view
     main testId="root" navigationKey=`${top(nav).id}` navigate=follow globalshortcut=hotkeyPressed notificationclick=notified width="100%" height="100%"
@@ -616,7 +595,7 @@ component Magnitor
                       for g in groups key=g
                         column gap=6
                           text groupTitle(g) font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" padding-left=4
-                          column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12 padding-bottom=(g == "cache" ? 12 : 0) gap=(g == "cache" ? 8 : 0)
+                          column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
                             column
                               for s, i in usage.slices.filter(x => x.group == g) key=s.id
                                 // The folder's row opens what is in it.
@@ -627,22 +606,6 @@ component Magnitor
                                   column flex=1
                                   text s.size color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`size-${s.id}`
                                   image "symbol:forward-chevron" color="-exact-tertiary-label" aria-hidden=true
-                            if g == "cache"
-                              // Confirmed here, in the popover: an alert would close it.
-                              if confirming
-                                text `Move ${usage.cacheSize} of app caches and Xcode build data to the Trash? You can put them back from there until you empty it.` font="-exact-footnote" testId="confirm-text"
-                                row gap=8 justify-content="flex-end"
-                                  button press=cancelClear padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" testId="cancel-clear"
-                                    text "Cancel"
-                                  button press=clear padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="confirm-clear"
-                                    text "Move to Trash" color="white" font-weight=600
-                              else
-                                if notice != ""
-                                  text notice font="-exact-footnote" color="-exact-secondary-label" testId="notice"
-                                button press=askClear disabled=pending(cleared) padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" align-items="center" justify-content="center" opacity=(pending(cleared) ? 0.6 : 1) testId="clear"
-                                  text (pending(cleared) ? "Moving to Trash…" : `Clear Cache ${usage.cacheSize}`)
-                          if g == "cache"
-                            text "Cached files come back on their own: apps download or rebuild them when they need them." font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4
               else
                 // One folder's contents, largest first.
                 row align-items="center" gap=6 padding-top=10 padding-left=8 padding-right=16 padding-bottom=6

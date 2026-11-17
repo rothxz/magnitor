@@ -1,9 +1,9 @@
 // Magnitor: the quick sources. The Rust crate in data/ answers `usage` and `contents`, walking the
 // folders on many threads; this answers the disk's size with `df`, the apps' names from
-// Spotlight, Clear Cache with `trash` and Show in Finder with `open`, and keeps the desktop
+// Spotlight and Show in Finder with `open`, and keeps the desktop
 // widget's reading (`saveWidget`, which the widget's `widgetVitals` reads). Every child runs with
 // the home directory as its working directory, so paths here are relative to it.
-import type { Result, Storage, TypeScriptAnswer, TypeScriptSources } from './app.contract.d.ts';
+import type { Result, TypeScriptAnswer, TypeScriptSources } from './app.contract.d.ts';
 import { execFile } from '@exact/child-process';
 
 // The widget's last reading, written by the app and read by the widget's refresh.
@@ -11,21 +11,14 @@ const WIDGET_FILE = 'app:/data/widget.json';
 
 export const grants = [
   'process.spawn /bin/df',
-  'process.spawn /usr/bin/trash',
   'process.spawn /usr/bin/mdfind',
   'process.spawn /usr/bin/mdls',
   'process.spawn /usr/bin/open',
-  'fs.read home:/Library/Caches',
-  'fs.read home:/Library/Developer/Xcode/DerivedData',
   'fs.read app:/data/widget.json',
   'fs.write app:/data/widget.json',
   'device.notifications purpose.notifications',
   'device.global-shortcuts',
 ].join('\n');
-
-// The cache folders Clear Cache empties. This app's own cache stays: it is in use.
-const CACHE_DIRS = ['Library/Caches', 'Library/Developer/Xcode/DerivedData'];
-const OWN_CACHE = 'com.magnitor.app';
 
 // Finder's decimal units: 511 KB, 211.2 MB, 2 GB (data/src/lib.rs's `format_bytes`).
 export function formatBytes(bytes: number): string {
@@ -73,19 +66,6 @@ async function installedApps(): Promise<Map<string, string>> {
   return names;
 }
 
-// The names inside each cache folder, as paths from home; a folder that is missing is empty.
-async function cacheEntries(storage: Storage): Promise<string[]> {
-  const entries: string[] = [];
-  for (const dir of CACHE_DIRS) {
-    try {
-      for (const name of await storage.fs.readdir(`home:/${dir}`)) if (name !== OWN_CACHE) entries.push(`${dir}/${name}`);
-    } catch (e) {
-      if ((e as { code?: string }).code !== 'ENOENT') throw e;
-    }
-  }
-  return entries;
-}
-
 // The sources Rust does not answer (data/src/lib.rs's RUST_SOURCES).
 const sources: TypeScriptSources = {
   disk: async ([_generation, _minute]): Promise<Result<'disk'>> => {
@@ -109,24 +89,6 @@ const sources: TypeScriptSources = {
       return { ok: true };
     } catch {
       return { ok: false };
-    }
-  },
-  clearCache: async (_args, _store, storage): Promise<Result<'clearCache'>> => {
-    try {
-      const entries = await cacheEntries(storage);
-      if (entries.length === 0) return { ok: true, message: 'The caches are already empty.' };
-      try {
-        await execFile('/usr/bin/trash', entries, { encoding: 'utf8', timeout: 180_000 });
-      } catch (e) {
-        // Some items can't be moved (one in use or protected); the rest were.
-        const stderr = String((e as { stderr?: string }).stderr ?? '').trim();
-        const failures = stderr === '' ? 0 : stderr.split('\n').length;
-        if (failures >= entries.length) throw e;
-        return { ok: true, message: `Moved ${entries.length - failures} of ${entries.length} items to the Trash. The rest are in use or protected.` };
-      }
-      return { ok: true, message: `Moved ${entries.length} ${entries.length === 1 ? 'item' : 'items'} to the Trash.` };
-    } catch (e) {
-      return { ok: false, message: `Couldn’t clear the cache: ${(e as Error).message}` };
     }
   },
   // The app's reading for the widget, kept until the next; the widget's timeline reloads after it.

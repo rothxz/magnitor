@@ -9,6 +9,8 @@
 #   newest master. Nobody gets it until you press Publish on the draft: the updater reads only
 #   published releases. Pushes that change only Markdown or screenshots don't build a draft.
 # - A pushed tag like v1.2.0: publish exactly that version at once (for a minor or major bump).
+#   Publishing a draft creates its tag too, which GitHub reports as a tag push by you; that
+#   release already exists, so the run stops at the `Gate` job instead of building it again.
 #
 # Release signing: add these repository secrets (Settings > Secrets and variables > Actions):
 #   MACOS_DEVELOPER_ID_P12           base64 of a "Developer ID Application" certificate + key (.p12)
@@ -104,10 +106,34 @@ jobs:
           path: dist-ci/*.zip
           retention-days: 14
 
+  # Publishing a draft in GitHub's UI creates its tag as the person who pressed Publish, so a
+  # tag push starts this workflow again for a release that is already out. Stop that here, on a
+  # cheap runner, before the macOS build.
+  gate:
+    name: Gate
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]] \
+            && [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ]; then
+            echo "::notice::$GITHUB_REF_NAME is already published (from a draft this workflow built); nothing to build."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
     name: Sign, notarize and publish
-    # A push to master or of a v* tag (the workflow's only push triggers).
-    if: github.event_name == 'push'
+    # A push to master or of a v* tag (the workflow's only push triggers) whose release isn't out yet.
+    needs: gate
+    if: needs.gate.outputs.release == 'true'
     runs-on: macos-26
     timeout-minutes: 90
     permissions:
@@ -217,8 +243,8 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         # A tag push publishes. A master push makes a draft, replacing the draft an earlier push
         # left: a draft has no git tag until it is published, so each push picks the same next
-        # version. Publishing a draft creates its tag at the commit it was built from; a tag made
-        # with the workflow's own token starts no new run.
+        # version. Publishing a draft creates its tag at the commit it was built from; that tag's
+        # push run stops at `gate`.
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             gh release create "$TAG" dist-ci/* --title "Magnitor $TAG" --generate-notes --verify-tag

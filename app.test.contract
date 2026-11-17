@@ -1,7 +1,7 @@
 // Run on macOS with a fixture home and scripted programs, so no real folder is measured,
-// nothing is moved to the Trash and Finder is not opened:
+// and Finder is not opened:
 //   bun exact.mjs agent macos --test app.test.contract --home tools/home \
-//     --process /bin/df=script:tools/df.json --process /usr/bin/trash=script:tools/trash.json \
+//     --process /bin/df=script:tools/df.json \
 //     --process /usr/bin/mdfind=script:tools/mdfind.json --process /usr/bin/mdls=script:tools/mdls.json \
 //     --process /usr/bin/open=script:tools/open.json
 // The Rust source walks tools/home itself (the driver's `--home`). Its files are whole 4 KiB
@@ -38,35 +38,8 @@ test "each folder's size and share of the total"
   expect tree missing "slice-pictures"
   expect tree missing "slice-music"
   expect text "disk" == "These folders use <0.1% of your disk. 512 GB is free."
-  expect text "clear" == "Clear Cache 246 KB"
-  expect text "quit" == "Quit Magnitor"
-
-test "Clear Cache asks first, and Cancel moves nothing"
-  clock +2000 real
-  tap "status-item"
-  clock settle
-  tap "tab-storage"
-  tap "clear"
-  expect text "confirm-text" == "Move 246 KB of app caches and Xcode build data to the Trash? You can put them back from there until you empty it."
   expect tree missing "clear"
-  tap "cancel-clear"
-  expect tree missing "confirm-text"
-  expect tree has "clear"
-  expect state notice == ""
-  expect state cleared == none
-
-test "Move to Trash moves each cache folder's contents, says so, and measures again"
-  clock +2000 real
-  tap "status-item"
-  clock settle
-  tap "tab-storage"
-  tap "clear"
-  tap "confirm-clear"
-  clock data
-  expect text "notice" == "Moved 5 items to the Trash."
-  expect state generation == 1
-  expect text "total" == "823 KB"
-  expect tree has "stats"
+  expect text "quit" == "Quit Magnitor"
 
 test "Measure Again asks the folders again"
   clock +2000 real

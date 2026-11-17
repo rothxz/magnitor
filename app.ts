@@ -25,7 +25,7 @@ export const grants = [
 
 // The cache folders Clear Cache empties. This app's own cache stays: it is in use.
 const CACHE_DIRS = ['Library/Caches', 'Library/Developer/Xcode/DerivedData'];
-const OWN_CACHE = 'com.example.magnitor-addab7';
+const OWN_CACHE = 'com.magnitor.app';
 
 // Finder's decimal units: 511 KB, 211.2 MB, 2 GB (data/src/lib.rs's `format_bytes`).
 export function formatBytes(bytes: number): string {

@@ -13,7 +13,7 @@ use std::time::UNIX_EPOCH;
 
 const GENERIC: &str = "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns";
 /// Magnitor's own folder in Library/Caches, which Clear Cache leaves alone (app.ts's `OWN_CACHE`).
-const OWN_CACHE: &str = "com.example.magnitor-addab7";
+const OWN_CACHE: &str = "com.magnitor.app";
 
 fn cache() -> &'static Mutex<HashMap<String, String>> {
     static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();

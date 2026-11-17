@@ -1,0 +1,180 @@
+diff --git a/host/apple/Sources/ExactKit/Mac/MenusMac.swift b/host/apple/Sources/ExactKit/Mac/MenusMac.swift
+index 9acbb0853..38aa69e10 100644
+--- a/host/apple/Sources/ExactKit/Mac/MenusMac.swift
++++ b/host/apple/Sources/ExactKit/Mac/MenusMac.swift
+@@ -317,7 +317,7 @@ final class MenuHost: NSObject {
+               connected(pop), source.map(connected) ?? true, !pop.inert,
+               source.map({ !(bubbled ? $0.authoredInert : $0.inert) && !(contextMenu ? $0.formDisabled : $0.disabled) }) ?? true,
+               pop.style["display"]?.string != "none", let page = presenter.viewport.window,
+-              source.map({ !hidden($0) || presenter.toolbar.contains($0) }) ?? true else { return }
++              source.map({ !hidden($0) || presenter.toolbar.contains($0) || presenter.statusItems.places($0) }) ?? true else { return }
+         let window = source?.window.flatMap { presenter.hosts($0) ? $0 : nil } ?? page
+         for old in leaving where old.node === pop { old.finish() }
+         // Only auto popovers form a dismissible stack. A manual popover does
+@@ -348,7 +348,7 @@ final class MenuHost: NSObject {
+         }
+         entries.append(entry)
+         // A menu's shape under the driver stays the painted menu it was.
+-        let windowed = wantsWindow(pop)
++        let windowed = wantsWindow(pop, from: source)
+         presenter.popoverEvents.changed(pop, open: true)
+         if let menu = entry.menu {
+             // Leave native tracking until the click and its app batch finish.
+@@ -374,6 +374,14 @@ final class MenuHost: NSObject {
+             }
+         } else if windowed, let source, present(entry, from: source, in: window) {
+             refresh()
++        } else if windowed, let source, presenter.statusItems.places(source) {
++            // A status item's popover AppKit could not show (its menu bar is
++            // hidden) has no page to be painted in: it closes, once this open
++            // has unwound, so the item's next click opens it afresh.
++            DispatchQueue.main.async { [weak self, weak entry] in
++                guard let self, let entry, self.entries.contains(where: { $0 === entry }) else { return }
++                self.close(entry.popover, restoreFocus: false)
++            }
+         } else {
+             paint(entry, in: window)
+             layout()
+@@ -553,7 +561,7 @@ final class MenuHost: NSObject {
+                   entry.value == entry.popover.props["popover"], !entry.popover.inert,
+                   (entry.value == "manual" || entry.parent.map(hidden) != true),
+                   entry.popover.style["display"]?.string != "none",
+-                  entry.value == "manual" || source.map({ !hidden($0) || presenter.toolbar.contains($0) }) ?? true,
++                  entry.value == "manual" || source.map({ !hidden($0) || presenter.toolbar.contains($0) || presenter.statusItems.places($0) }) ?? true,
+                   entry.menu == nil || (entry.confirmation.map(valid) ?? isMenuShaped(entry.popover))
+             else { close(entry.popover); continue }
+             if entry.menu != nil { rejectActiveMenuProperties(in: entry.popover) }
+diff --git a/host/apple/Sources/ExactKit/Mac/PopoversMac.swift b/host/apple/Sources/ExactKit/Mac/PopoversMac.swift
+index 115cdd77c..fdb299430 100644
+--- a/host/apple/Sources/ExactKit/Mac/PopoversMac.swift
++++ b/host/apple/Sources/ExactKit/Mac/PopoversMac.swift
+@@ -99,9 +99,14 @@ final class NativePopover: NSObject, NSPopoverDelegate {
+ }
+ 
+ extension MenuHost {
+-    func wantsWindow(_ pop: NodeView) -> Bool {
+-        pop.style["position_try_fallbacks"] == nil && !painted
+-            && !(ExactEnv.agentMode && (isMenuShaped(pop) || isConfirmation(pop)))
++    /// Whether `pop` is AppKit's popover rather than painted in the page. One a
++    /// placed status item opens is AppKit's under either chrome: the item is in
++    /// the menu bar, and the page it would be painted in may be a window that is
++    /// never shown (an accessory app's).
++    func wantsWindow(_ pop: NodeView, from source: NodeView? = nil) -> Bool {
++        guard pop.style["position_try_fallbacks"] == nil else { return false }
++        if let source, presenter?.statusItems.button(of: source) != nil, !isMenuShaped(pop), !isConfirmation(pop) { return true }
++        return !painted && !(ExactEnv.agentMode && (isMenuShaped(pop) || isConfirmation(pop)))
+     }
+ 
+     func paint(_ entry: Entry, in window: NSWindow) {
+@@ -142,7 +147,7 @@ extension MenuHost {
+         entry.hasFallbacks = hasFallbacks
+         guard entry.menu == nil, let presenter, presenter.viewport.window != nil,
+               let source = entry.source, let window = source.window,
+-              wantsWindow(pop) != (entry.native != nil) else { return }
++              wantsWindow(pop, from: source) != (entry.native != nil) else { return }
+         let oldWindow = pop.window
+         let focused = oldWindow.flatMap(focusOwner)
+         let selection = (oldWindow?.firstResponder as? NSTextView)?.selectedRange()
+@@ -198,8 +203,12 @@ extension MenuHost {
+         // A button in the window's bar has no box in the page: its item's.
+         // AppKit shows no popover against an anchor it cannot see (measured:
+         // a window not on screen, a hidden view, one scrolled out of sight).
++        // A status item's button is in the menu bar, not the page: the popover
++        // points at it, whether or not the app's window is shown.
++        let statusButton = presenter.statusItems.button(of: source)
+         let view: NSView, invoker: NSRect
+-        if let windowContent, pressed() != nil, source.window != nil {
++        if let statusButton { (view, invoker) = (statusButton, statusButton.bounds) }
++        else if let windowContent, pressed() != nil, source.window != nil {
+             (view, invoker) = (windowContent, windowContent.convert(self.anchor(source, in: source, run: entry.run), from: source))
+         } else if let content = windowContent, let bar = presenter.toolbar.anchor(of: source, in: content) { (view, invoker) = (content, bar) }
+         else if source.window != nil { (view, invoker) = (source, self.anchor(source, in: source, run: entry.run)) }
+@@ -208,7 +217,7 @@ extension MenuHost {
+         // Pointed at in `view`: one opened at its invoker and given insets
+         // later points at them from the invoker's coordinates.
+         let pointed = { [weak view, weak windowContent] () -> NSRect? in
+-            guard let view, let rect = pressed() else { return nil }
++            guard statusButton == nil, let view, let rect = pressed() else { return nil }
+             return view === windowContent ? rect : view.convert(rect, from: windowContent)
+         }
+         let anchor = pointed() ?? invoker
+@@ -219,12 +228,16 @@ extension MenuHost {
+         // and one not yet told is not told over AppKit's.
+         entry.block = nil
+         presenter.regionsUntold.removeValue(forKey: pop.id)
+-        native.popover.behavior = entry.value == "manual" ? .applicationDefined : .transient
++        // A transient popover closes once its app is not active, and a script never
++        // activates the app (LLP 1012): there a status item's popover is closed by
++        // the page's own rules alone (Escape, a click outside as the driver sends
++        // one, the item's toggle).
++        native.popover.behavior = entry.value == "manual" || (statusButton != nil && ExactEnv.agentMode) ? .applicationDefined : .transient
+         native.popover.animates = !ExactEnv.agentFreezes
+         native.content.pointerTracking = { [weak presenter] in presenter?.trackPointer($0) }
+         // As large as its content, at most what the screen can show beside AppKit's own margin.
+         // A block's used size holds the box's margins, which are no part of the popover.
+-        let screen = (window.screen ?? NSScreen.main)?.visibleFrame.size ?? window.frame.size
++        let screen = (view.window?.screen ?? window.screen ?? NSScreen.main)?.visibleFrame.size ?? window.frame.size
+         let maximum = CGSize(width: max(1, screen.width - 2 * Self.popoverMargin), height: max(1, screen.height - 2 * Self.popoverMargin))
+         let margins = PositionArea.margins(of: pop), edge = Self.edge(PositionArea.of(pop))
+         presenter.blocks.show(pop, in: native.content, block: .atMost(maximum), owner: false) { [weak native, weak pop] size in
+@@ -240,7 +253,7 @@ extension MenuHost {
+         // anchor's rectangle moved out by it, in the window's content view,
+         // since AppKit keeps a rectangle to the view it is given in.
+         // A margin changed while it is shown moves the rectangle in the same view.
+-        let content = view.isFlipped ? window.contentView : nil
++        let content = view.isFlipped && view.window === window ? window.contentView : nil
+         let at: NSView = margins.gap(edge) > 0 ? content ?? view : view
+         let pointing = { [weak view, weak at] (margins: PositionArea.Margins) -> NSRect in
+             guard let view, let at else { return anchor }
+@@ -261,6 +274,12 @@ extension MenuHost {
+             native.positioning = nil // a toolbar item's popover points at the item
+             native.popover.show(relativeTo: item)
+         } else {
++            // A menu bar extra's popover takes the keyboard and closes on a click
++            // elsewhere only while its app is active: its item's click asks for
++            // that, as a hand-built one does (never under a script, LLP 1012).
++            if statusButton != nil, !ExactEnv.agentMode {
++                if #available(macOS 14.0, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
++            }
+             native.popover.show(relativeTo: rect, of: at, preferredEdge: at.isFlipped ? edge : Self.unflipped(edge))
+         }
+         guard native.popover.isShown else {
+@@ -308,7 +327,8 @@ extension MenuHost {
+     func closed(_ native: NativePopover) {
+         if let entry = entries.first(where: { $0.native === native }) {
+             if let event = NSApp.currentEvent, [.leftMouseDown, .leftMouseUp].contains(event.type), let source = entry.source,
+-               let hit = event.window?.contentView?.superview?.hitTest(event.locationInWindow), contains(source, hit) {
++               let hit = event.window?.contentView?.superview?.hitTest(event.locationInWindow),
++               contains(source, hit) || (event.window != nil && presenter?.statusItems.button(of: source)?.window === event.window) {
+                 dismissedByClick = (ObjectIdentifier(source), event.eventNumber)
+             }
+             close(entry.popover, restoreFocus: false)
+diff --git a/host/apple/Sources/ExactKit/Mac/StatusItemsMac.swift b/host/apple/Sources/ExactKit/Mac/StatusItemsMac.swift
+index a3c792925..9906c5edb 100644
+--- a/host/apple/Sources/ExactKit/Mac/StatusItemsMac.swift
++++ b/host/apple/Sources/ExactKit/Mac/StatusItemsMac.swift
+@@ -9,7 +9,9 @@
+ //
+ // A click opens the item's menu when the button names a menu-shaped popover
+ // (LLP 1021 D1), filled from its rows as it opens (`MenuHost.fill`); with no
+-// menu it runs `press`. An accessory app's menu ends with a separator and
++// menu it runs `press`. A `popovertarget` that is no menu is AppKit's
++// `NSPopover` pointing at the item's button (PopoversMac.swift): a menu bar
++// extra's window, which needs no window of the app's. An accessory app's menu ends with a separator and
+ // "Quit <App>" unless the root's `-exact-menu-remove` names `status-quit`
+ // (D7): with no window and no Dock tile, the menu is the only way to quit.
+ #if os(macOS)
+@@ -50,6 +52,13 @@ final class StatusItemHost: NSObject {
+ 
+     /// Whether `node` is placed as a status item, so not in the window.
+     func places(_ node: NodeView) -> Bool { items[node.id] != nil }
++    /// The menu bar button that stands for `node`, while it is placed: what a
++    /// popover it opens points at (PopoversMac.swift), as a hand-built menu bar
++    /// extra's `NSPopover` points at its item's button. Placed but not on screen
++    /// (the menu bar hidden in a full-screen space) it is still the item's: a
++    /// popover that cannot be shown there is closed, never painted in the page
++    /// (an accessory app's window is never shown), so the next click opens it.
++    func button(of node: NodeView) -> NSStatusBarButton? { items[node.id]?.button }
+     /// Whether any status item of this session is placed.
+     var placed: Bool { !items.isEmpty }
+     /// Whether any session's status item is placed.

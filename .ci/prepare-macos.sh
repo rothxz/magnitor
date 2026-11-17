@@ -14,6 +14,18 @@ if [ ! -d "$EXACT/.git" ]; then
 fi
 git -C "$EXACT" fetch --quiet origin "$EXACT_REF" || true
 git -C "$EXACT" checkout --quiet --detach "$EXACT_REF"
+
+# Fixes to Exact that Magnitor needs and $EXACT_REF lacks, as .patch files in .ci/exact-patches.
+# status-item-popover.patch: a status item's popover is AppKit's NSPopover at the menu bar
+# button. Without it the popover is painted in the app's window, which an accessory app never
+# shows, so clicking the menu bar icon opens nothing. Drop a patch once Exact includes it; a
+# patch that no longer applies (after bumping EXACT_REF) stops the build here.
+for patch in "$PWD"/.ci/exact-patches/*.patch; do
+  [ -e "$patch" ] || continue
+  echo "Applying $(basename "$patch") to Exact"
+  git -C "$EXACT" apply --whitespace=nowarn "$patch"
+done
+
 bun install --frozen-lockfile --cwd "$EXACT"
 
 if ! command -v rustup >/dev/null; then

@@ -16,7 +16,7 @@ Live CPU, memory and thermal readings, a searchable process list, and a disk-spa
 
 <br />
 
-<a href="https://github.com/rothxz/magnitor/releases/latest"><img src="https://img.shields.io/badge/Download_for_macOS-.dmg-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="Download Magnitor for macOS" height="40" /></a>
+<a href="https://github.com/rothxz/magnitor/releases/latest/download/Magnitor.dmg"><img src="https://img.shields.io/badge/Download_for_macOS-.dmg-0A84FF?style=for-the-badge&logo=apple&logoColor=white" alt="Download Magnitor for macOS" height="40" /></a>
 
 <sub>Signed and notarized · macOS 14 Sonoma or later</sub>
 

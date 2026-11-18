@@ -235,6 +235,9 @@ jobs:
           mkdir -p dist-ci
           cp "$out/Magnitor.dmg" "dist-ci/Magnitor-${TAG}-macos.dmg"
           cp "$out/Magnitor.zip" "dist-ci/Magnitor-${TAG}-macos.zip"
+          # Same .dmg under a fixed name, so the README's Download button can link straight to
+          # releases/latest/download/Magnitor.dmg. The updater only reads the `-macos.zip`.
+          cp "$out/Magnitor.dmg" "dist-ci/Magnitor.dmg"
           ls -la dist-ci
 
       - name: Publish GitHub Release

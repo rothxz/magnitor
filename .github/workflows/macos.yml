@@ -2,11 +2,11 @@
 #
 # - Every pull request (and a manual run): build the app (ad hoc signed) and upload it as a
 #   workflow artifact. UI tests run locally before pushing, not here.
-# - Every push to master: a DRAFT release. The version is the latest published v* tag with its
-#   patch number raised by one (v0.1.3 -> v0.1.4; v0.0.1 when there is none yet). The app is
+# - Every push to the `release` branch (e.g. merging master into it): a DRAFT release. The
+#   version is the latest published v* tag with its patch number raised by one (v0.1.3 -> v0.1.4; v0.0.1 when there is none yet). The app is
 #   built, signed with a Developer ID, notarized and stapled, and the .dmg and .zip are attached
 #   to a draft GitHub Release. Each push replaces the pending draft, so there is one, from the
-#   newest master. Nobody gets it until you press Publish on the draft: the updater reads only
+#   newest `release`. Nobody gets it until you press Publish on the draft: the updater reads only
 #   published releases. Pushes that change only Markdown or screenshots don't build a draft.
 # - A pushed tag like v1.2.0: publish exactly that version at once (for a minor or major bump).
 #   Publishing a draft creates its tag too, which GitHub reports as a tag push by you; that
@@ -25,7 +25,7 @@ name: macOS
 
 on:
   push:
-    branches: [master]
+    branches: [release]
     tags: ['v*']
     # Not evaluated for tag pushes, which always release.
     paths-ignore:
@@ -131,7 +131,7 @@ jobs:
 
   release:
     name: Sign, notarize and publish
-    # A push to master or of a v* tag (the workflow's only push triggers) whose release isn't out yet.
+    # A push to `release` or of a v* tag (the workflow's only push triggers) whose release isn't out yet.
     needs: gate
     if: needs.gate.outputs.release == 'true'
     runs-on: macos-26
@@ -241,7 +241,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
-        # A tag push publishes. A master push makes a draft, replacing the draft an earlier push
+        # A tag push publishes. A `release` push makes a draft, replacing the draft an earlier push
         # left: a draft has no git tag until it is published, so each push picks the same next
         # version. Publishing a draft creates its tag at the commit it was built from; that tag's
         # push run stops at `gate`.

@@ -16,6 +16,8 @@ crate-type = ["rlib"]
 
 [dependencies]
 exact-runner.workspace = true
+# Docker's Engine API and simctl answer JSON; already built for exact-runner.
+serde_json = "1.0"
 
 # `build.rs` writes the view's shapes as Rust structs (`contract rust`).
 [build-dependencies]

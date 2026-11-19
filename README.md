@@ -41,10 +41,16 @@ Live CPU, memory and thermal readings, a searchable process list, and a disk-spa
 ### Storage
 - **Where the space went:** a pie chart of your home folder by size, measured on a thread per core so large folders don't stall the UI.
 - **Drill down:** open any folder to see what it holds, or **Show in Finder**.
+- **Developer Files:** finds your projects' build folders (`node_modules`, `target`, `.next`, `Pods`, `.venv`, Elixir, Haskell, CMake and more) and about 25 tool caches (Xcode, npm, Homebrew, Gradle, Cargo…), suggests what is safe to clear, and moves it to the Trash so Finder's **Put Back** still works. **Delete Now** then frees the space without touching anything else in the Trash. Go's module cache, Docker and old simulators are cleared with their own commands (`go clean -modcache`, `docker system prune`, `xcrun simctl delete unavailable`), each run only after you confirm. Add folders on other drives, or leave folders out, in Settings.
+
+### Ports
+- **What's listening:** the TCP ports your processes listen on, development servers first and named for what you started (`vite`, `next dev`), with a warning on one open to your network.
+- **Docker containers by name:** a container's published port shows its name, compose project and image; **Stop** stops that container, not Docker.
+- **Act on a server:** open it in the browser, copy its URL or command, show its folder, stop or force stop it. ↑ ↓, Enter and ⌘K work as in Activity Monitor.
 
 ### Always on
 - **Menu bar icon:** choose Waveform, Gauge, Chip, Memory, Disk or Pie Chart, and choose what the menu bar item shows.
-- **Alerts:** get notified when CPU or memory stays above a threshold for a set time, or when free disk space drops too low.
+- **Alerts:** get notified when CPU or memory stays above a threshold for a set time, or when free disk space drops too low; when one app or process stays busy (a runaway build, a stuck `node`) or its memory keeps growing (a leak); and once a month when developer files you can clean up pass a size you choose. Clicking an alert opens Magnitor at what it is about.
 - **Desktop widget:** small and medium widgets with CPU, memory pressure and free disk space.
 - **Global keyboard shortcut:** open Magnitor from anywhere.
 - **Automatic updates:** checks GitHub Releases at launch and every six hours, then installs and relaunches in one click. Each update is verified against Magnitor's own Developer ID signature before it replaces the app.

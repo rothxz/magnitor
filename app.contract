@@ -73,7 +73,17 @@ shape Proc
   cpu: string
   memory: string
   mine: bool
-  // Its app's icon as a PNG data URL ("" for a process outside an app).
+  // The app bundle it runs in ("" for a process outside an app), whose icon `ProcIcon` asks
+  // for once. The icons themselves stay out of this reading: as data URLs they were nearly all
+  // of each tick's answer, sent and compared again every three seconds.
+  app: string
+  // An app's processes as one row (grouped): `pid` is its main process's, `name` the app's,
+  // `count` how many, and `cpu` and `memory` theirs added up. One process: false and 1.
+  group: bool
+  count: number
+
+// An app's icon as a PNG data URL ("" when none could be drawn).
+shape AppIcon
   icon: string
 
 shape Tasks
@@ -98,6 +108,12 @@ shape Tasks
   count: number
   processes: Proc[]
   more: number
+  // While searching: how many processes match, and their % CPU and memory added up, every
+  // match counted (an app's main process and its helpers), not only the rows shown. "" with
+  // no search.
+  matchCount: number
+  matchCpu: string
+  matchMemory: string
   error: string
 
 // One process, as Activity Monitor's inspector shows it.
@@ -120,6 +136,24 @@ shape ProcInfo
 shape Ended
   ok: bool
   message: string
+
+// One app's processes together, as its grouped row's inspector shows them.
+shape AppInfo
+  // The app bundle's path, as the row named it.
+  app: string
+  found: bool
+  name: string
+  cpu: string
+  memory: string
+  count: number
+  // The main process: the one whose parent is outside the app.
+  main: number
+  // Every process this user's, so they can be quit.
+  mine: bool
+  // Magnitor's own app, which quits only from Quit Magnitor.
+  own: bool
+  // Each process, busiest first.
+  processes: Proc[]
 
 // The machine's load alone, read every few seconds while something shows or watches it.
 shape Vitals
@@ -216,6 +250,12 @@ fn diskLimitText(gb: number): string = gb == 0 ? "Never" : `${gb} GB`
 fn sustainText(s: number): string = s < 60 ? `${s} ${s == 1 ? "second" : "seconds"}` : `${s / 60} ${s == 60 ? "minute" : "minutes"}`
 
 fn processes(n: number): string = `${n} ${n == 1 ? "process" : "processes"}`
+// The pid of the row at `i`; -1 past the end.
+fn pidAt(ps: Proc[], i: number): number = match ps.at(i) { case some(p) => p.pid, case none => -1 }
+fn rowLabel(p: Proc): string =p.group ? `${p.name}, ${p.detail}, ${p.cpu} percent CPU, ${p.memory}` : `${p.name}, process ${p.pid}, ${p.cpu} percent CPU, ${p.memory}`
+// What an app's action asks before it ends anything, and the button that confirms it.
+fn appEndText(how: string, name: string, n: number): string = how == "force" ? `Force quit “${name}”? It ends at once, and anything unsaved in it is lost.` : how == "quitAll" ? `Quit all ${processes(n)} of “${name}”?` : how == "forceAll" ? `Force quit all ${processes(n)} of “${name}”? They end at once, and anything unsaved is lost.` : how == "restart" ? `Quit “${name}” and open it again?` : how == "forceRestart" ? `Force quit all of “${name}” and open it again? Anything unsaved is lost.` : `Quit “${name}”?`
+fn appEndLabel(how: string): string = how == "force" ? "Force Quit" : how == "quitAll" ? "Quit All" : how == "forceAll" ? "Force Quit All" : how == "restart" ? "Restart" : how == "forceRestart" ? "Force Restart" : "Quit"
 fn countText(n: number, more: number): string = more > 0 ? `${processes(n)} · ${more} more match: search to find one` : processes(n)
 
 // The segmented controls in Liquid Glass (NSGlassEffectView on macOS 26 and later): a glass
@@ -246,6 +286,15 @@ style SegmentOn
   padding-left = 12
   padding-right = 12
 
+style Action
+  flex = 1
+  padding-top = 7
+  padding-bottom = 7
+  border-radius = 8
+  background-color = "light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))"
+  align-items = "center"
+  justify-content = "center"
+
 style Label
   color = "-exact-secondary-label"
   font-weight = 500
@@ -262,8 +311,11 @@ component Magnitor
   state generation = 0
   // The folder whose contents the popover shows; "" for the overview.
   state opened = ""
-  // The Settings window draws Settings alone, so the folders are measured in the main one.
-  resource usage = usage(generation) when isMain as shape Usage else empty()
+  // The Settings window draws Settings alone, so the folders are measured in the main one, and
+  // only once Storage has been opened: a walk keeps every core busy for seconds, too much to
+  // spend at each launch for a tab that may never be looked at.
+  state storageSeen = false
+  resource usage = usage(generation) when isMain and storageSeen as shape Usage else empty()
   resource contents = contents(opened, generation) when opened != "" as shape Contents else empty()
   // Asked again after each measure and each minute the main window watches (`diskPulse`).
   resource disk = disk(generation, diskPulse) when isMain as shape Disk else empty()
@@ -276,11 +328,34 @@ component Magnitor
   state query = ""
   // The process the inspector shows; -1 for the list (0 is the kernel).
   state inspected = -1
+  // Each app's processes as one row (Raycast's App Grouping), kept across launches.
+  state grouped = true persist
+  // The app whose processes the inspector shows (its bundle's path); "" for none.
+  state inspectedApp = ""
+  // What an app's action waits to be confirmed for: "quit", "force", "restart", "quitAll",
+  // "forceAll" or "forceRestart"; "" for none.
+  state appEnding = ""
+  resource appInfo = appGroup(inspectedApp, tick) when tab == "tasks" and inspectedApp != "" as shape AppInfo else empty()
+  mutation appEnded as shape Ended then afterAppEnd
   // "quit" or "force" while Quit or Force Quit waits to be confirmed.
   state ending = ""
   state endNotice = ""
-  resource tasks = tasks(tick, sort, query) when isMain and tab == "tasks" as shape Tasks else empty()
+  // The row ↑ and ↓ highlight, as Raycast's list does, by pid: the rows re-sort each tick, so
+  // a position would slide to another process. -1 for none.
+  state selected = -1
+  // The row a right-click or ⌘K opened the actions menu for.
+  state aimedPid = -1
+  state aimedApp = ""
+  state aimedName = ""
+  state aimedGroup = false
+  state aimedMine = false
+  // `transient`: a reading is stale by the next tick, so it is never kept in the device's
+  // storage for a later launch (which would write it out every three seconds).
+  resource tasks = tasks(tick, sort, query, grouped) when isMain and tab == "tasks" as shape Tasks else empty() transient
   resource info = process(inspected, tick) when tab == "tasks" and inspected != -1 as shape ProcInfo else empty()
+  // Each row's app icon, asked once per app (`key`): a tick that reorders the rows or keeps
+  // an app's processes asks nothing, and an app that joins the list asks for its own alone.
+  resource procIcons = appIcon(p.app) for p in tasks.processes key=p.app as shape AppIcon
   mutation ended as shape Ended then afterEnd
   // Every three seconds: each reading lists every process and redraws the list.
   task sampler when tab == "tasks" and shown
@@ -374,6 +449,14 @@ component Magnitor
   derive reading = tasks.count == 0 and tasks.error == ""
   // Shown from the first reading of this process on; a tick's re-reading keeps it on screen.
   derive infoReady = info.pid == inspected
+  derive appReady = appInfo.app == inspectedApp
+  derive appLocked = not appInfo.mine or appInfo.own or pending(appEnded)
+  // The highlighted row's position: the selected process wherever it sorts now, else the top
+  // match while searching (Enter opens it), else none.
+  derive selectedAt = tasks.processes.map(p => p.pid).indexOf(selected)
+  derive highlighted = selectedAt != -1 ? selectedAt : (query.trim() != "" and tasks.processes.length > 0 ? 0 : -1)
+  // The list's keys work while it is what the popover shows.
+  derive listKeys = shown and tab == "tasks" and inspected == -1 and inspectedApp == "" and top(nav).name == "home"
 
   // The popover first: AppKit's popover is a window of its own, and while it stays open the
   // app's last window has not closed, so the quit would wait for a click that dismisses it.
@@ -389,6 +472,7 @@ component Magnitor
     togglePopover("stats", source="status-item")
   // An alert's click opens the popover at what it is about.
   action notified(tag: string, e: NotificationEvent)
+    storageSeen = storageSeen or tag == "disk"
     tab = tag == "disk" ? "storage" : "tasks"
     showPopover("stats", source="status-item")
   action record
@@ -495,6 +579,7 @@ component Magnitor
       widgetShown = widgetShows
   action pick(t: string)
     tab = t
+    storageSeen = storageSeen or t == "storage"
   action popover(e: ToggleEvent)
     shown = e.newState == "open"
   action sample
@@ -502,12 +587,113 @@ component Magnitor
   action search(v: string)
     query = v
     endNotice = ""
+    selected = -1
   action order(key: string)
     sort = key
   action openProcess(pid: number)
     inspected = pid
     ending = ""
     endNotice = ""
+  // A row: an app's opens its processes together, a process's opens that process.
+  action openRow(pid: number, app: string, group: bool)
+    if group
+      inspectedApp = app
+      appEnding = ""
+    else
+      inspected = pid
+      ending = ""
+    endNotice = ""
+    selected = pid
+  // A row's actions menu (right-click, or ⌘K on the highlighted row) notes which row it is for.
+  action aim(pid: number, app: string, name: string, group: bool, mine: bool)
+    aimedPid = pid
+    aimedApp = app
+    aimedName = name
+    aimedGroup = group
+    aimedMine = mine
+    selected = pid
+  action openAimed
+    if aimedGroup
+      inspectedApp = aimedApp
+      appEnding = ""
+    else
+      inspected = aimedPid
+      ending = ""
+    endNotice = ""
+  // Quit and Force Quit from the menu end the row at once, as Raycast's do, and the list says
+  // how it went (`endNotice`). An app's row ends its main process; its helpers end with it.
+  // The data refuses Magnitor itself and macOS's first processes, saying so.
+  action endAimed(how: string)
+    if aimedGroup
+      send appEnded = endApp(aimedApp, how)
+    else
+      send ended = endProcess(aimedPid, how == "force")
+    endNotice = ""
+  // The list's keys, from the search field or with nothing focused: ↑ and ↓ move the
+  // highlight, Enter opens the highlighted row, and ⌘K opens its actions menu.
+  action listKey(k: string, e: KeyboardEvent)
+    if listKeys and not e.isComposing and tasks.processes.length > 0
+      let plain = not (e.metaKey or e.ctrlKey or e.altKey)
+      let last = tasks.processes.length - 1
+      if plain and (k == "ArrowDown" or k == "ArrowUp")
+        let at = k == "ArrowDown" ? (highlighted == -1 ? 0 : (highlighted < last ? highlighted + 1 : last)) : (highlighted <= 0 ? 0 : highlighted - 1)
+        let pid = pidAt(tasks.processes, at)
+        selected = pid
+        scrollIntoView(`proc-row-${pid}`, block="nearest")
+        preventDefault()
+      else if plain and k == "Enter" and highlighted != -1
+        match tasks.processes.at(highlighted)
+          case some(p)
+            if p.group
+              inspectedApp = p.app
+              appEnding = ""
+            else
+              inspected = p.pid
+              ending = ""
+            endNotice = ""
+            selected = p.pid
+          case none
+            selected = -1
+        preventDefault()
+      else if (e.metaKey or e.ctrlKey) and e.code == "KeyK"
+        match tasks.processes.at(highlighted == -1 ? 0 : highlighted)
+          case some(p)
+            aimedPid = p.pid
+            aimedApp = p.app
+            aimedName = p.name
+            aimedGroup = p.group
+            aimedMine = p.mine
+            selected = p.pid
+            showPopover("proc-menu", source=`proc-row-${p.pid}`)
+            focus("menu-open")
+          case none
+            selected = -1
+        preventDefault()
+  action closeApp
+    inspectedApp = ""
+    appEnding = ""
+    endNotice = ""
+  action toggleGrouped
+    grouped = not grouped
+  action askAppEnd(how: string)
+    appEnding = how
+    endNotice = ""
+  action cancelAppEnd
+    appEnding = ""
+  action confirmAppEnd
+    send appEnded = endApp(inspectedApp, appEnding)
+    appEnding = ""
+  action afterAppEnd
+    match appEnded
+      case some(r)
+        endNotice = r.message
+        if r.ok
+          tick = tick + 1
+      case none
+        endNotice = ""
+  action copyPath(path: string)
+    copyText(path)
+    endNotice = "Copied the path."
   action closeProcess
     inspected = -1
     ending = ""
@@ -538,7 +724,7 @@ component Magnitor
     send revealed = reveal(path)
 
   view
-    main testId="root" navigationKey=`${top(nav).id}` navigate=follow globalshortcut=hotkeyPressed notificationclick=notified width="100%" height="100%"
+    main testId="root" navigationKey=`${top(nav).id}` navigate=follow globalshortcut=hotkeyPressed notificationclick=notified key=listKey width="100%" height="100%"
       for e in stack(nav) key=e.id
         if e.name == "home"
           column navigationKey=`${e.id}` position="absolute" inset=0
@@ -638,7 +824,7 @@ component Magnitor
                             button press=showInFinder(it.path) aria-label=`Show ${it.name} in Finder` padding=6 border-radius=6 color="-exact-secondary-label" testId=`item-reveal-${i}`
                               image "symbol:search"
             column role="region" id="panel-tasks" aria-label="Activity Monitor" flex=1 min-height=0 display=(tab == "tasks" ? "flex" : "none") flex-direction="column" testId="tasks"
-              if inspected == -1
+              if inspected == -1 and inspectedApp == ""
                 column gap=10 padding-left=12 padding-right=12 padding-bottom=8
                   // The machine: CPU load as Activity Monitor graphs it, and memory with its pressure.
                   row gap=10
@@ -689,7 +875,7 @@ component Magnitor
                         text "Swap" font="-exact-caption1" color="-exact-secondary-label" flex=1
                         text tasks.swap font="-exact-caption1" font-variant-numeric="tabular-nums" testId="memory-swap"
                   row gap=8 align-items="center"
-                    input type="search" value=query input=search placeholder="Search" aria-label="Search Processes" flex=1 min-width=0 testId="search"
+                    input type="search" value=query input=search placeholder="Search" aria-label="Search Processes" aria-controls="process-rows" aria-activedescendant=(highlighted == -1 ? "" : `proc-row-${pidAt(tasks.processes, highlighted)}`) flex=1 min-width=0 testId="search"
                     row role="radiogroup" appearance="none" aria-label="Sort by" class=GlassTrack testId="sort"
                       for key in ["cpu", "memory", "name"] key=key
                         button role="radio" aria-checked=(sort == key) press=order(key) class=(sort == key ? SegmentOn : Segment) testId=`sort-${key}`
@@ -707,26 +893,117 @@ component Magnitor
                     else if tasks.processes.length == 0
                       text `No process matches “${query.trim()}”.` color="-exact-secondary-label" text-align="center" padding-top=40 testId="no-match"
                     else
-                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
+                      column id="process-rows" background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
                         // The columns, the sorted one in bold, as Activity Monitor marks it.
-                        row gap=8 padding-top=8 padding-bottom=6 aria-hidden=true
-                          text "Process" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "name" ? 700 : 400) flex=1
-                          text "% CPU" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "cpu" ? 700 : 400) width="3.5rem" text-align="right"
-                          text "Memory" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "memory" ? 700 : 400) width="5rem" text-align="right"
+                        row gap=8 padding-top=8 padding-bottom=6
+                          // The first column's heading switches it: each app's processes as one
+                          // row ("Apps"), or every process on its own ("Processes").
+                          row flex=1 align-items="center"
+                            button press=toggleGrouped aria-label="Group by App" aria-pressed=grouped display="flex" flex-direction="row" gap=4 align-items="center" testId="group"
+                              image "symbol:sf/square.stack.3d.up" font="-exact-caption1" color=(grouped ? "-exact-system-blue" : "-exact-secondary-label") aria-hidden=true
+                              text (grouped ? "Apps" : "Processes") font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "name" ? 700 : 400)
+                          text "% CPU" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "cpu" ? 700 : 400) width="3.5rem" text-align="right" aria-hidden=true
+                          text "Memory" font="-exact-caption1" color="-exact-secondary-label" font-weight=(sort == "memory" ? 700 : 400) width="5rem" text-align="right" aria-hidden=true
                         for p, i in tasks.processes key=p.pid
-                          // A row opens the process's inspector.
-                          button press=openProcess(p.pid) aria-label=`${p.name}, process ${p.pid}, ${p.cpu} percent CPU, ${p.memory}` display="flex" flex-direction="row" gap=8 align-items="center" padding-top=6 padding-bottom=6 border-top="1px solid -exact-separator" testId=`proc-${i}`
-                            if p.icon != ""
-                              image p.icon width=20 height=20 flex-shrink=0 aria-hidden=true testId=`proc-icon-${i}`
-                            else
-                              column width=20 height=20 flex-shrink=0 align-items="center" justify-content="center" aria-hidden=true
-                                image "symbol:settings" font="-exact-title3" color="-exact-tertiary-label"
+                          // A row opens the process's inspector; a right-click its actions menu.
+                          // The highlighted one (↑ ↓) is shaded, reaching a little past the text.
+                          button id=`proc-row-${p.pid}` press=openRow(p.pid, p.app, p.group) contextmenu=aim(p.pid, p.app, p.name, p.group, p.mine) contextPopover="proc-menu" aria-label=rowLabel(p) display="flex" flex-direction="row" gap=8 align-items="center" padding-top=6 padding-bottom=6 margin-left=-6 margin-right=-6 padding-left=6 padding-right=6 border-radius=6 background-color=(i == highlighted ? "light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.1))" : "transparent") border-top="1px solid -exact-separator" testId=`proc-${i}`
+                            ProcIcon(app=p.app, icon=iconAt(procIcons, i), id=`proc-icon-${i}`)
                             column flex=1 min-width=0 gap=1 text-align="left"
                               text p.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-name-${i}`
                               text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-detail-${i}`
                             text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right" testId=`proc-cpu-${i}`
                             text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right" testId=`proc-memory-${i}`
+                        // While searching: every match added up.
+                        if tasks.matchCpu != ""
+                          row gap=8 align-items="center" padding-top=8 padding-bottom=8 border-top="1px solid -exact-separator" testId="match-total"
+                            text `Total · ${processes(tasks.matchCount)}` font-weight=600 flex=1 testId="match-count"
+                            text tasks.matchCpu font-weight=600 font-variant-numeric="tabular-nums" width="3.5rem" text-align="right" testId="match-cpu"
+                            text tasks.matchMemory font-weight=600 font-variant-numeric="tabular-nums" width="5rem" text-align="right" testId="match-memory"
                       text countText(tasks.count, tasks.more) font="-exact-caption1" color="-exact-secondary-label" text-align="center" testId="count"
+                      // A row's actions, as Raycast's action panel: a right-click opens it at the
+                      // pointer, ⌘K on the highlighted row.
+                      column id="proc-menu" popover="auto" role="menu" aria-label=aimedName testId="proc-menu"
+                        button press=openAimed popovertarget="proc-menu" popovertargetaction="hide" testId="menu-open"
+                          text (aimedGroup ? "Show Processes" : "Show Info")
+                        if aimedApp != ""
+                          button press=showInFinder(aimedApp) popovertarget="proc-menu" popovertargetaction="hide" testId="menu-reveal"
+                            text "Show in Finder"
+                          button press=copyPath(aimedApp) popovertarget="proc-menu" popovertargetaction="hide" testId="menu-copy"
+                            text "Copy Path"
+                        hr
+                        button press=endAimed("quit") disabled=(not aimedMine) popovertarget="proc-menu" popovertargetaction="hide" testId="menu-quit"
+                          text "Quit"
+                        button press=endAimed("force") disabled=(not aimedMine) destructive=true popovertarget="proc-menu" popovertargetaction="hide" testId="menu-force"
+                          text "Force Quit"
+              else if inspected == -1
+                // One app's processes together: its totals, its actions, and each process.
+                row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
+                  button press=closeApp aria-label="Back" padding=6 border-radius=6 testId="app-back"
+                    image "symbol:back"
+                  text (appReady ? appInfo.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="app-name"
+                scroll id="app" flex=1 min-height=0 scrollbar-width="none"
+                  column gap=10 padding-left=12 padding-right=12 padding-bottom=12
+                    if not appReady
+                      column align-items="center" gap=12 padding-top=80 padding-bottom=80
+                        progress aria-label="Reading the app"
+                    else if not appInfo.found
+                      text `${appInfo.name} has quit.` color="-exact-secondary-label" text-align="center" padding-top=40 testId="app-gone"
+                      if endNotice != ""
+                        text endNotice font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="app-notice"
+                    else
+                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
+                        Field(label="Processes", value=`${appInfo.count}`, first=true, id="app-count")
+                        Field(label="% CPU", value=appInfo.cpu, first=false, id="app-cpu")
+                        Field(label="Memory", value=appInfo.memory, first=false, id="app-memory")
+                        Field(label="Main Process ID", value=`${appInfo.main}`, first=false, id="app-main")
+                      text appInfo.app font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4 testId="app-path"
+                      row gap=8
+                        button press=showInFinder(appInfo.app) class=Action testId="app-reveal"
+                          text "Show in Finder"
+                        button press=copyPath(appInfo.app) class=Action testId="app-copy"
+                          text "Copy Path"
+                      if endNotice != ""
+                        text endNotice font="-exact-footnote" color="-exact-secondary-label" testId="app-notice"
+                      // Confirmed here, in the popover: an alert would close it.
+                      if appEnding != ""
+                        text appEndText(appEnding, appInfo.name, appInfo.count) font="-exact-footnote" testId="app-confirm-text"
+                        row gap=8 justify-content="flex-end"
+                          button press=cancelAppEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="app-cancel"
+                            text "Cancel"
+                          button press=confirmAppEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="app-confirm"
+                            text appEndLabel(appEnding) color="white" font-weight=600
+                      else
+                        // The main process (its helpers end with it), or every process; Restart
+                        // opens the app again once it has gone.
+                        row gap=8
+                          button press=askAppEnd("quit") disabled=appLocked class=Action opacity=(appLocked ? 0.5 : 1) testId="app-quit"
+                            text "Quit"
+                          button press=askAppEnd("force") disabled=appLocked class=Action opacity=(appLocked ? 0.5 : 1) testId="app-force"
+                            text "Force Quit"
+                          button press=askAppEnd("restart") disabled=appLocked class=Action opacity=(appLocked ? 0.5 : 1) testId="app-restart"
+                            text "Restart"
+                        row gap=8
+                          button press=askAppEnd("quitAll") disabled=appLocked class=Action opacity=(appLocked ? 0.5 : 1) testId="app-quit-all"
+                            text "Quit All"
+                          button press=askAppEnd("forceAll") disabled=appLocked class=Action opacity=(appLocked ? 0.5 : 1) testId="app-force-all"
+                            text "Force Quit All"
+                          button press=askAppEnd("forceRestart") disabled=appLocked class=Action opacity=(appLocked ? 0.5 : 1) testId="app-force-restart"
+                            text "Force Restart"
+                        if appInfo.own
+                          text "This is Magnitor. To quit it, use Quit Magnitor." font="-exact-footnote" color="-exact-secondary-label" testId="app-why"
+                        else if not appInfo.mine
+                          text `Some of ${appInfo.name}’s processes belong to another user. You can quit only your own.` font="-exact-footnote" color="-exact-secondary-label" testId="app-why"
+                      text "Processes" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" padding-left=4
+                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
+                        for p, i in appInfo.processes key=p.pid
+                          // A process opens its own inspector; Back returns here.
+                          button press=openProcess(p.pid) aria-label=rowLabel(p) display="flex" flex-direction="row" gap=8 align-items="center" padding-top=6 padding-bottom=6 border-top=(i == 0 ? "none" : "1px solid -exact-separator") testId=`app-proc-${i}`
+                            column flex=1 min-width=0 gap=1 text-align="left"
+                              text p.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`app-proc-name-${i}`
+                              text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums"
+                            text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right"
+                            text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right"
               else
                 // One process, as Activity Monitor's inspector shows it.
                 row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
@@ -754,6 +1031,11 @@ component Magnitor
                           Field(label="Running For", value=info.running, first=false, id="info-running")
                       if info.path != ""
                         text info.path font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4 testId="info-path"
+                        row gap=8
+                          button press=showInFinder(info.path) class=Action testId="info-reveal"
+                            text "Show in Finder"
+                          button press=copyPath(info.path) class=Action testId="info-copy"
+                            text "Copy Path"
                       if endNotice != ""
                         text endNotice font="-exact-footnote" color="-exact-secondary-label" testId="info-notice"
                       // Confirmed here, in the popover: an alert would close it.
@@ -902,6 +1184,24 @@ component Field
     row gap=12 align-items="baseline" padding-top=7 padding-bottom=7 border-top=(first ? "none" : "1px solid -exact-separator")
       text label color="-exact-secondary-label"
       text value flex=1 min-width=0 text-align="right" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=id
+
+// The icon `procIcons` holds for row `i` ("" until it lands).
+fn iconAt(icons: AppIcon[], i: number): string = match icons.at(i) { case some(a) => a.icon, case none => "" }
+
+// A process's icon: its app's, or a gear for a process outside an app; an empty square while
+// its app's icon is still on the way.
+component ProcIcon
+  props
+    app: string
+    icon: string
+    id: string
+  view
+    if icon != ""
+      image icon width=20 height=20 flex-shrink=0 aria-hidden=true testId=id
+    else
+      column width=20 height=20 flex-shrink=0 align-items="center" justify-content="center" aria-hidden=true
+        if app == ""
+          image "symbol:settings" font="-exact-title3" color="-exact-tertiary-label"
 
 // The desktop widget (app.json's `widgets`): the main window's last reading of the machine.
 component VitalsWidget

@@ -20,23 +20,35 @@ fn cache() -> &'static Mutex<HashMap<String, String>> {
     CACHE.get_or_init(Default::default)
 }
 
-/// The icons of `apps` ("" for a process outside an app), in order. Apps not yet known are
-/// read from disk or drawn together, each on its own thread.
-pub fn icons(apps: &[String]) -> Vec<String> {
+/// One app's icon, "" for none: the `appIcon` source. Kept after the first ask.
+pub fn icon(app: &str) -> String {
+    if app.is_empty() {
+        return String::new();
+    }
+    if let Some(known) = cache().lock().unwrap().get(app) {
+        return known.clone();
+    }
+    let drawn = app_icon(app);
+    cache().lock().unwrap().insert(app.to_owned(), drawn.clone());
+    drawn
+}
+
+/// The icons of `apps` not yet known, read from disk or drawn together, each on its own
+/// thread, so the view's asks for them (`icon`) answer from memory. Known ones cost a lookup.
+pub fn prepare(apps: &[String]) {
     let missing: Vec<&String> = {
         let known = cache().lock().unwrap();
         let mut seen = std::collections::HashSet::new();
         apps.iter().filter(|a| !a.is_empty() && !known.contains_key(*a) && seen.insert(*a)).collect()
     };
-    if !missing.is_empty() {
-        let drawn: Vec<(String, String)> = std::thread::scope(|s| {
-            let handles: Vec<_> = missing.iter().map(|app| s.spawn(move || ((*app).clone(), app_icon(app)))).collect();
-            handles.into_iter().filter_map(|h| h.join().ok()).collect()
-        });
-        cache().lock().unwrap().extend(drawn);
+    if missing.is_empty() {
+        return;
     }
-    let known = cache().lock().unwrap();
-    apps.iter().map(|a| known.get(a).cloned().unwrap_or_default()).collect()
+    let drawn: Vec<(String, String)> = std::thread::scope(|s| {
+        let handles: Vec<_> = missing.iter().map(|app| s.spawn(move || ((*app).clone(), app_icon(app)))).collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    });
+    cache().lock().unwrap().extend(drawn);
 }
 
 /// The app's icon as a data URL: the one kept on disk, or drawn now and kept.

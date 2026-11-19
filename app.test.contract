@@ -211,10 +211,91 @@ test "sorting and a search that matches nothing"
   clock data
   expect text "no-match" == "No process matches “no-such-process-here”."
 
+// Quit in the menu ends the row at once, with no inspector. The processes here are real, so
+// no test presses it on one that would end; Magnitor's own row has it disabled.
+test "a right-click on a row opens its actions; Magnitor's own can't be quit there"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  type "search" "Magnitor"
+  clock data
+  expect text "proc-name-0" == "Magnitor"
+  tap "proc-0" contextmenu
+  expect state aimedName == "Magnitor"
+  expect tree has "menu-open"
+  expect disabled "menu-quit"
+  expect disabled "menu-force"
+
+test "another user's process has Quit in its menu disabled"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  type "search" "launchd"
+  clock data
+  tap "proc-0" contextmenu
+  expect disabled "menu-quit"
+  expect disabled "menu-force"
+  tap "menu-open"
+  clock data
+  expect text "info-pid" == "1"
+
+test "↑ and ↓ move the highlight, Enter opens it, and ⌘K opens its actions"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  expect state highlighted == -1
+  type "search" key "ArrowDown"
+  expect state highlighted == 0
+  type "search" key "ArrowDown"
+  expect state highlighted == 1
+  type "search" key "ArrowUp"
+  expect state highlighted == 0
+  type "search" key "ArrowUp"
+  expect state highlighted == 0
+  type "search" key "Meta+k"
+  expect state aimedPid >= 0
+  expect tree has "menu-open"
+  tap "menu-open"
+  clock data
+  expect state listKeys == false
+
+test "a search highlights its top match, and Enter opens it"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-tasks"
+  clock data
+  type "search" "launchd"
+  clock data
+  expect state highlighted == 0
+  type "search" key "Enter"
+  clock data
+  expect text "info-pid" == "1"
+
 // Settings. The gear in the popover's footer (⌘,) opens the Mac's Settings window; these open
 // Settings at its route in the main window (`at "/settings"`), where it is a screen over the
 // app with Done. tools/home/.vitals is the machine under load: CPU 97%, memory 62%. The main
 // window watches it every five seconds while the widget is kept up to date (the default).
+
+test "the list groups each app's processes, and its heading shows every process instead"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  clock data
+  expect state grouped == true
+  expect tree has "proc-0"
+  tap "group"
+  clock data
+  expect state grouped == false
+  expect tree has "proc-0"
+  tap "group"
+  expect state grouped == true
 
 test "a recorded shortcut is kept; a key without ⌘ or ⌃ is refused, and Clear forgets it"
   at "/settings"

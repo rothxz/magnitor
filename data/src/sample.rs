@@ -67,7 +67,7 @@ pub struct RawSample {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{end, system, take};
+pub use mac::{alive, end, system, take};
 
 /// The machine's counters alone, without a process: the menu bar's readout and the alerts read
 /// these every few seconds.
@@ -84,6 +84,11 @@ pub fn take() -> Result<RawSample, String> {
 #[cfg(not(target_os = "macos"))]
 pub fn end(_pid: i32, _force: bool) -> Result<(), i32> {
     Err(1)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn alive(_pid: i32) -> bool {
+    false
 }
 
 /// `ps`'s `time`, `[[dd-]hh:]mm:ss.ss`, in nanoseconds.
@@ -508,6 +513,12 @@ mod mac {
         }
         let system = RawSystem { cpu_temperature: crate::sensors::cpu_temperature(), ..counters() };
         Ok(RawSample { procs, system })
+    }
+
+    /// Whether `pid` still runs (another user's too: the kernel refuses the signal, not the pid).
+    pub fn alive(pid: i32) -> bool {
+        let signalled = unsafe { kill(pid, 0) };
+        signalled == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1)
     }
 
     /// SIGTERM, or SIGKILL when forced; the errno when refused.

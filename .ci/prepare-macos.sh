@@ -18,7 +18,15 @@ git -C "$EXACT" checkout --quiet --detach "$EXACT_REF"
 # Fixes to Exact that Magnitor needs and $EXACT_REF lacks, as .patch files in .ci/exact-patches.
 # status-item-popover.patch: a status item's popover is AppKit's NSPopover at the menu bar
 # button. Without it the popover is painted in the app's window, which an accessory app never
-# shows, so clicking the menu bar icon opens nothing. Drop a patch once Exact includes it; a
+# shows, so clicking the menu bar icon opens nothing.
+# status-item-reopen.patch (after the popover patch): a status item's popover is kept, closed,
+# with the panel still in it, and shown again on the next click. Exact made a new NSPopover and
+# window at each open and moved the whole panel in and back out at each close (measured: a
+# reopen 0.65-0.8 s of CPU before, 0.13-0.15 s after).
+# status-item-sync.patch: the status item's button is set only when what it shows changes.
+# Exact set its title, image and tooltip after every update, and each set made AppKit redraw
+# the menu bar item for every display: the main thread's largest cost while Magnitor's panel
+# is open (measured 5.9% to 1.8% of a core). Drop a patch once Exact includes it; a
 # patch that no longer applies (after bumping EXACT_REF) stops the build here.
 for patch in "$PWD"/.ci/exact-patches/*.patch; do
   [ -e "$patch" ] || continue

@@ -1,0 +1,87 @@
+diff --git a/host/apple/Sources/ExactKit/Mac/ChooserMac.swift b/host/apple/Sources/ExactKit/Mac/ChooserMac.swift
+index fb4da770a..3f4ad6ad6 100644
+--- a/host/apple/Sources/ExactKit/Mac/ChooserMac.swift
++++ b/host/apple/Sources/ExactKit/Mac/ChooserMac.swift
+@@ -187,6 +187,27 @@ extension MenuHost {
+         if img.imageSource?.hasPrefix("symbol:") == true { return img.image }
+         return img.raster.map { Self.rowImage($0.image.image) }
+     }
++    /// What `image(of:)` shows, as a value equal while the picture is: that
++    /// makes a new NSImage at each call, so a caller that keeps an image (a
++    /// status item's button, synced after every batch) compares this instead.
++    /// A raster's bitmap is held, so its identity is never another's.
++    func imageKey(of row: NodeView) -> ImageKey? {
++        guard row.isButton else { return nil }
++        if let symbol = row.face?.symbol { return ImageKey(text: "face:\(symbol)", bitmap: nil) }
++        guard !row.isNativeButton, let img = Self.firstImage(in: row) else { return nil }
++        if let source = img.imageSource, source.hasPrefix("symbol:") {
++            return img.image.map { _ in ImageKey(text: "\(source)#\(img.symbolKey ?? "")", bitmap: nil) }
++        }
++        return img.raster.map { ImageKey(text: "raster", bitmap: $0.image.image) }
++    }
++    struct ImageKey {
++        let text: String
++        let bitmap: AnyObject?
++        static func same(_ a: ImageKey?, _ b: ImageKey?) -> Bool {
++            guard let a, let b else { return a == nil && b == nil }
++            return a.text == b.text && a.bitmap === b.bitmap
++        }
++    }
+     /// A menu item's image is 16 points: fit the bitmap in it, keeping its ratio.
+     static func rowImage(_ bitmap: CGImage) -> NSImage {
+         let side: CGFloat = 16, natural = CGSize(width: bitmap.width, height: bitmap.height)
+diff --git a/host/apple/Sources/ExactKit/Mac/StatusItemsMac.swift b/host/apple/Sources/ExactKit/Mac/StatusItemsMac.swift
+--- a/host/apple/Sources/ExactKit/Mac/StatusItemsMac.swift
++++ b/host/apple/Sources/ExactKit/Mac/StatusItemsMac.swift
+@@ -24,8 +24,9 @@
+     private struct Weak { weak var host: StatusItemHost? }
+     /// The placed items, by the button's id.
+     private(set) var items: [UInt32: NSStatusItem] = [:]
+-    /// The image each item was given from: a sync runs after every batch.
+-    private var images: [UInt32: NSImage?] = [:]
++    /// What each item's image shows (`MenuHost.imageKey`): a sync runs after
++    /// every batch, and the image it reads is a new object each time.
++    private var images: [UInt32: MenuHost.ImageKey?] = [:]
+     private var saidUnplaced = false
+     /// The session has ended: the next oldest places its own.
+     private(set) var ended = false
+@@ -121,9 +122,10 @@
+         guard let button = item.button else { return }
+         button.tag = Int(node.id)
+         let label = presenter.menus.title(of: node)
+-        let image = presenter.menus.image(of: node)
+-        if images[node.id] != .some(image) {
+-            images[node.id] = .some(image)
++        let key = presenter.menus.imageKey(of: node)
++        if images[node.id].map({ !MenuHost.ImageKey.same($0, key) }) ?? true {
++            images[node.id] = .some(key)
++            let image = presenter.menus.image(of: node)
+             let template = image?.copy() as? NSImage
+             // The menu bar tints a template image (D7, Apple's HIG).
+             template?.isTemplate = true
+@@ -132,15 +134,20 @@
+             }
+             button.image = template
+         }
+-        button.title = button.image == nil ? label : ""
+-        button.toolTip = label
+-        button.setAccessibilityLabel(label)
+-        button.appearsDisabled = node.disabled
++        // Each set only when it changes: this runs after every batch, and any
++        // set of the button, even to the value it holds, makes AppKit draw the
++        // item again into a bitmap for each display's menu bar (measured: the
++        // main thread's largest cost while an app updates every few seconds).
++        let title = button.image == nil ? label : ""
++        if button.title != title { button.title = title }
++        if button.toolTip != label { button.toolTip = label }
++        if button.accessibilityLabel() != label { button.setAccessibilityLabel(label) }
++        if button.appearsDisabled != node.disabled { button.appearsDisabled = node.disabled }
+         // A menu AppKit opens on the click, filled from the rows then; a
+         // disabled item has neither menu nor press.
+         if !node.disabled, presenter.menus.toolbarPopover(of: node) != nil {
+             if (item.menu as? InvokerMenu)?.source !== node { item.menu = presenter.menus.toolbarMenu(for: node) }
+-        } else {
++        } else if item.menu != nil {
+             item.menu = nil
+         }
+         if item.menu != nil, let pop = presenter.menus.toolbarPopover(of: node) { presenter.menus.rejectActiveMenuProperties(in: pop) }

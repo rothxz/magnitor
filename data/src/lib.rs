@@ -23,10 +23,10 @@ pub mod walk;
 mod shapes {
     include!(concat!(env!("OUT_DIR"), "/shapes.rs"));
 }
-use shapes::{Contents, ContractValue, Item, Slice, Usage};
+use shapes::{AppIcon, Contents, ContractValue, Item, Slice, Usage};
 
 /// The sources this crate answers; app.ts answers the others.
-pub const RUST_SOURCES: &[&str] = &["usage", "contents", "tasks", "process", "endProcess", "vitals"];
+pub const RUST_SOURCES: &[&str] = &["usage", "contents", "tasks", "process", "endProcess", "vitals", "appIcon", "appGroup", "endApp"];
 
 /// A measured folder: its id in the view, its name, its group, and where it is under home.
 struct Measured {
@@ -116,7 +116,7 @@ impl DataSource for Magnitor {
     /// Nothing is known before the walk or a reading: every resource is asked at launch.
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         match source {
-            "usage" | "contents" | "tasks" | "process" | "endProcess" | "vitals" => Err(DataError::Unavailable("measured at run time".into())),
+            "usage" | "contents" | "tasks" | "process" | "endProcess" | "vitals" | "appIcon" | "appGroup" | "endApp" => Err(DataError::Unavailable("measured at run time".into())),
             _ => Err(DataError::UnknownSource(source.into())),
         }
     }
@@ -130,9 +130,13 @@ impl DataSource for Magnitor {
         match source {
             "usage" => Ok(Answer::Now(self.usage(number(0)?).to_value())),
             "contents" => Ok(Answer::Now(self.contents(text(0)?, number(1)?).to_value())),
-            "tasks" => Ok(Answer::Now(self.tasks.tasks(number(0)?, text(1)?, text(2)?).to_value())),
+            // Grouped by app unless the view says otherwise.
+            "tasks" => Ok(Answer::Now(self.tasks.tasks(number(0)?, text(1)?, text(2)?, !matches!(args.get(3), Some(Value::Bool(false)))).to_value())),
+            "appGroup" => Ok(Answer::Now(self.tasks.app_group(text(0)?, number(1)?).to_value())),
+            "endApp" => Ok(Answer::Now(self.tasks.end_app(text(0)?, text(1)?).to_value())),
             "process" => Ok(Answer::Now(self.tasks.process(number(0)?, number(1)?).to_value())),
             "vitals" => Ok(Answer::Now(self.vitals.vitals(number(0)?).to_value())),
+            "appIcon" => Ok(Answer::Now(AppIcon { icon: icons::icon(text(0)?) }.to_value())),
             "endProcess" => {
                 let force = matches!(args.get(1), Some(Value::Bool(true)));
                 Ok(Answer::Now(self.tasks.end(number(0)?, force).to_value()))

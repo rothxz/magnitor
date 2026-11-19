@@ -1,0 +1,121 @@
+diff --git a/host/apple/Sources/ExactKit/Mac/MenusMac.swift b/host/apple/Sources/ExactKit/Mac/MenusMac.swift
+--- a/host/apple/Sources/ExactKit/Mac/MenusMac.swift
++++ b/host/apple/Sources/ExactKit/Mac/MenusMac.swift
+@@ -64,6 +64,8 @@
+     var painted = ExactEnv.authoredChrome
+     /// Popovers AppKit is still taking away (PopoversMac.swift).
+     var leaving: [NativePopover] = []
++    /// Status items' popovers kept, closed, for their next open (PopoversMac.swift, `park`).
++    var parked: [UInt32: NativePopover] = [:]
+     /// The click with which AppKit closed an invoker's own popover.
+     var dismissedByClick: (source: ObjectIdentifier, click: Int)?
+     /// Confirmations whose chosen item awaits its turn (ChooserMac.swift),
+@@ -335,6 +337,9 @@
+         // the menu below.
+         if isConfirmation(pop), presenter.alerts.isOpen(pop) || presenter.alerts.present(pop, from: source, popover: true) { return }
+         let entry = Entry(pop, source: source, previous: focusOwner(window), run: run, bubbled: bubbled)
++        // A kept popover's subtree is still in its closed popover: its parent
++        // is the authored one, where the block's home is.
++        if parked[pop.id]?.node === pop, let home = presenter.blocks.parent(of: pop) { entry.parent = home }
+         presentations[pop.id, default: 0] += 1
+         revalidate()
+         if !ExactEnv.agentMode, let source {
+@@ -509,6 +514,8 @@
+             } else { window.makeFirstResponder(presenter?.viewport) }
+         }
+         if let native = entry.native {
++            // The page closed it: a status item's popover is kept for its next open.
++            native.parkOnFinish = true
+             dismiss(native)
+             refresh()
+         } else if entry.menu == nil {
+@@ -519,6 +526,8 @@
+     func reset() {
+         while let last = entries.last { close(last.popover, restoreFocus: false) }
+         for old in leaving { old.finish() }
++        for kept in parked.values { kept.release() }
++        parked.removeAll()
+         choosing.forEach { $0.cancel() }; choosing.removeAll()
+         picking.forEach { $0.cancelled = true }; picking.removeAll()
+         popovers.removeAll(); presentations.removeAll()
+diff --git a/host/apple/Sources/ExactKit/Mac/PopoversMac.swift b/host/apple/Sources/ExactKit/Mac/PopoversMac.swift
+--- a/host/apple/Sources/ExactKit/Mac/PopoversMac.swift
++++ b/host/apple/Sources/ExactKit/Mac/PopoversMac.swift
+@@ -86,12 +86,43 @@
+     }
+     /// AppKit has taken the popover away: its own close, or this host's.
+     func popoverDidClose(_ notification: Notification) { host?.closed(self) }
++    /// A status item's popover is opened again and again from the menu bar:
++    /// set by `present`, it may be kept between opens (`park`).
++    var keepable = false
++    /// Set by the page's close: this finish parks the subtree rather than
++    /// sending it home.
++    var parkOnFinish = false
++    /// Its subtree stays in `content`, hidden, after the close: the next open
++    /// shows this same popover and window again. Making the window and
++    /// moving the subtree into it and back (each move re-resolving the
++    /// appearance of every view in it) was most of an open's and a close's
++    /// work: a menu bar app's panel spent most of a second of CPU on each.
++    private(set) var parked = false
+     /// The subtree goes back under its authored parent, where the kernel
+-    /// lays it out again. Once.
++    /// lays it out again; or, for a kept popover the page closed, stays here
++    /// for the next open (`parked`). Once per showing.
+     func finish() {
+         guard !finished else { return }
+         finished = true
+         host?.leaving.removeAll { $0 === self }
++        guard let presenter = host?.presenter, let node else { return }
++        if keepable, parkOnFinish, presenter.views[node.id] === node, node.superview === content {
++            parked = true
++            host?.park(self, for: node.id)
++            return
++        }
++        if presenter.views[node.id] === node { node.frame = home }
++        presenter.blocks.release(node)
++    }
++    /// Shown again from `parked`: it may finish once more.
++    func unpark() {
++        parked = false; finished = false; parkOnFinish = false
++    }
++    /// A parked subtree goes home after all (the session resets, or the
++    /// popover can no longer be the one it was).
++    func release() {
++        guard parked else { return }
++        parked = false
+         guard let presenter = host?.presenter, let node else { return }
+         if presenter.views[node.id] === node { node.frame = home }
+         presenter.blocks.release(node)
+@@ -221,7 +252,8 @@
+             return view === windowContent ? rect : view.convert(rect, from: windowContent)
+         }
+         let anchor = pointed() ?? invoker
+-        let native = NativePopover(host: self, node: pop, home: entry.frame)
++        let native = takeParked(pop) ?? NativePopover(host: self, node: pop, home: entry.frame)
++        native.keepable = statusButton != nil
+         entry.native = native
+         // AppKit's popover gives its own block and takes it back on its
+         // finish: a region told before is told again if it is painted again,
+@@ -303,6 +335,22 @@
+         }) { native.window?.makeFirstResponder(presenter.keyView(of: target)) }
+         return true
+     }
++    /// Keep `native`, closed, with its subtree in it, for `id`'s next open.
++    func park(_ native: NativePopover, for id: UInt32) {
++        if let other = parked[id], other !== native { other.release() }
++        parked[id] = native
++    }
++    /// `pop`'s kept popover, ready to show again; nil when there is none, or
++    /// the one kept is no longer this popover's (it then goes home).
++    func takeParked(_ pop: NodeView) -> NativePopover? {
++        guard let kept = parked.removeValue(forKey: pop.id) else { return nil }
++        guard kept.node === pop, live(pop), pop.superview === kept.content, !kept.popover.isShown else {
++            kept.release()
++            return nil
++        }
++        kept.unpark()
++        return kept
++    }
+     /// What AppKit leaves around a popover's content, a side (measured).
+     static let popoverMargin: CGFloat = 13
+     /// The edge of the invoker a `position-area` names, in a flipped view

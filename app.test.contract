@@ -11,8 +11,21 @@
 //   Documents 320 KiB, Downloads 240 KiB, Desktop 4 KiB, Movies empty, no Pictures or Music
 // tools/df.json reports a disk of 1e9 KiB with 5e8 KiB free; Spotlight's scripts name
 // com.alpha "Alpha".
+//   Projects/engine (Cargo.toml): target/ 96 KiB; Projects/web (package.json): node_modules/
+//   64 KiB, .next/ 16 KiB; .npm/_cacache 32 KiB: with DerivedData and CocoaPods' cache, the six
+//   Developer Files finds
+// tools/home/.ports stands in for the listening servers (the Rust `ports` source reads it under
+// the agent only): vite on 3000 in ~/Projects/web, Postgres on 5432, Django on 8000 open to the
+// network, and ControlCenter's AirPlay on 7000. Stopping one there only takes it off the list.
+// Under the agent the native module's Trash moves nothing (the fixtures stay), answering each
+// path that exists as moved.
 // tools/home/.vitals stands in for the machine's load (the Rust `vitals` source reads it under
 // the agent only): CPU 97%, memory 62%, normal pressure.
+// tools/home/go/pkg/mod is Go's module cache (4 KiB), which Developer Files offers to clear
+// with `go clean -modcache` (never run under the agent); the walk never enters it.
+// tools/volume is a folder outside home, with one project: shop's node_modules, 8 KiB.
+// tools/home/.processes stands in for the process alerts' readings (the Rust `unusual` source,
+// under the agent only): node at 180% CPU, and Leaky at 800 MB growing 150 MB a minute.
 // A menu bar app shows no window: each test opens the stats popover from the status item
 // first, as a person does, once the menu bar has laid the item out (a moment after launch,
 // on real time): the popover points at it.
@@ -394,6 +407,64 @@ test "no alert while alerts are off"
   clock data
   expect state alertsOn == false
   expect state cpuAlerted == false
+  expect state procPulse == 0
+
+test "a process busy for the chosen time, and one whose memory keeps growing, each alert once"
+  at "/settings"
+  prefer permission.notifications granted
+  tap "alerts-on"
+  type "proc-busy-for" "60"
+  expect state procBusyFor == 60
+  clock +10000
+  clock data
+  clock +30000
+  clock data
+  clock +5000
+  expect state procAlerted == []
+  clock +60000
+  clock data
+  clock +5000
+  expect state procAlerted.0 == "cpu:node:1"
+  expect state procAlerted.length == 1
+  clock +60000
+  clock data
+  clock +60000
+  clock data
+  clock +60000
+  clock data
+  clock +60000
+  clock data
+  clock +60000
+  clock data
+  clock +60000
+  clock data
+  clock +60000
+  clock data
+  clock +60000
+  clock data
+  clock +60000
+  clock data
+  clock +5000
+  expect state procAlerted.1 == "memory:Leaky:1"
+  expect state procAlerted.length == 2
+  clock +60000
+  clock data
+  clock +5000
+  expect state procAlerted.1 == "memory:Leaky:1"
+  expect state procAlerted.length == 2
+  reload
+  expect state procBusyFor == 60
+
+test "Never for both process limits reads no process"
+  at "/settings"
+  tap "alerts-on"
+  type "proc-cpu-limit" "0"
+  type "proc-grow-limit" "0"
+  expect tree has "proc-busy-for"
+  clock +30000
+  clock data
+  expect state procWatch == false
+  expect state procPulse == 0
 
 test "the widget shows the last reading, as Settings previews it"
   at "/settings"
@@ -429,3 +500,256 @@ test "Settings says the build is up to date, checks again on Check Now, and keep
   expect text "update-status" == "Magnitor 0.1.0 is up to date."
   reload
   expect state autoUpdate == false
+
+// Ports.
+
+test "Ports lists development servers first, by port, and folds away the other ports"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-ports"
+  clock data
+  expect text "port-0-port" == "3000"
+  expect text "port-0-name" == "vite"
+  expect text "port-0-detail" == "web · node · 2 h 14 min"
+  expect tree has "port-0-browse"
+  expect tree has "port-0-stop"
+  expect tree missing "port-0-exposed"
+  expect text "port-1-port" == "5432"
+  expect text "port-1-name" == "postgres"
+  expect text "port-1-detail" == "3 days 2 h"
+  expect tree missing "port-1-browse"
+  expect text "port-2-name" == "manage.py runserver"
+  expect text "port-2-detail" == "api · python3 · 1 min"
+  expect text "port-2-exposed" == "Open to your network"
+  expect text "others-count" == "1"
+  expect tree missing "other-0"
+  tap "others-toggle"
+  expect text "other-0-name" == "ControlCenter"
+  expect tree missing "other-0-stop"
+  tap "port-0-browse"
+  clock data
+  expect no failures
+
+test "a server's details, where Stop asks first and Cancel stops nothing"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-ports"
+  clock data
+  tap "port-0-open"
+  expect text "port-title" == "vite"
+  expect text "port-number" == "3000"
+  expect text "port-url" == "localhost:3000"
+  expect text "port-address" == "This Mac only"
+  expect text "port-process" == "node (4242)"
+  expect text "port-running" == "2 h 14 min"
+  expect text "port-folder" == "~/Projects/web"
+  expect text "port-command" == "node node_modules/.bin/vite --port 3000"
+  expect tree missing "port-exposed-note"
+  tap "port-copy-url"
+  expect text "port-detail-notice" == "Copied the URL."
+  tap "port-stop"
+  expect text "port-confirm-text" == "Stop vite on port 3000?"
+  tap "port-cancel"
+  expect tree missing "port-confirm-text"
+  expect text "port-title" == "vite"
+  tap "port-force"
+  expect text "port-confirm-text" == "Force stop vite on port 3000? It ends at once, and anything unsaved in it is lost."
+  tap "port-confirm"
+  clock data
+  expect state portPid == -1
+  expect text "port-notice" == "Force stopped vite on port 3000."
+  clock data
+  expect text "port-0-name" == "postgres"
+
+test "a server open to the network says so, and a row's Stop ends it at once"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-ports"
+  clock data
+  tap "port-2-open"
+  expect text "port-address" == "All interfaces"
+  expect tree has "port-exposed-note"
+  tap "port-back"
+  expect state portPid == -1
+  tap "port-2-stop"
+  clock data
+  expect text "port-notice" == "Stopped manage.py runserver on port 8000."
+  clock data
+  expect tree missing "port-2"
+  expect text "port-1-name" == "postgres"
+
+// Developer Files. A project's suggestion depends on when its files last changed, which is when
+// the fixture was checked out, so these tests choose by hand.
+
+test "Storage leads to Developer Files: project folders and caches, largest first"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  clock data
+  expect text "dev-summary" == "401 KB in 6 items you can clean up"
+  tap "dev-card"
+  expect state cleaning == true
+  expect text "clean-total" == "401 KB"
+  expect text "dev-project-0-name" == "engine"
+  expect text "dev-project-0-size" == "98 KB"
+  expect text "dev-project-0-place" == "Rust build · ~/Projects/engine"
+  expect text "dev-project-1-name" == "web"
+  expect text "dev-project-1-size" == "66 KB"
+  expect text "dev-project-1-place" == "Node modules · ~/Projects/web"
+  expect text "dev-project-2-place" == "Next.js build · ~/Projects/web"
+  expect text "dev-cache-0-name" == "Xcode build data"
+  expect text "dev-cache-0-size" == "164 KB"
+  expect text "dev-cache-0-place" == "Rebuilt the next time you build"
+  expect text "dev-cache-1-name" == "npm cache"
+  expect text "dev-cache-1-size" == "33 KB"
+  expect text "dev-cache-2-name" == "CocoaPods cache"
+  expect text "dev-cache-2-size" == "25 KB"
+  tap "dev-cache-1-reveal"
+  clock data
+  expect no failures
+  tap "clean-back"
+  expect state cleaning == false
+  expect text "total" == "823 KB"
+
+test "choosing what to clean up, and Move to Trash asks first"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  clock data
+  tap "dev-card"
+  tap "clean-none"
+  expect text "clean-chosen" == "0 bytes"
+  expect text "clean-go-label" == "Choose What to Clean Up"
+  tap "dev-cache-0-check"
+  expect text "clean-chosen" == "164 KB"
+  tap "dev-project-0-check"
+  expect text "clean-chosen" == "262 KB"
+  expect text "clean-count" == "chosen · 2 items"
+  tap "dev-project-0-check"
+  expect text "clean-chosen" == "164 KB"
+  tap "dev-project-0-check"
+  expect text "clean-go-label" == "Move 262 KB to the Trash"
+  tap "clean-go"
+  expect text "clean-confirm-text" == "Move 2 items (262 KB) to the Trash? Each is rebuilt or downloaded again when a project needs it. Delete them from the Trash to free the space."
+  tap "clean-cancel"
+  expect tree missing "clean-confirm-text"
+  tap "clean-suggested"
+  expect state flipped == []
+  tap "clean-none"
+  tap "dev-cache-0-check"
+  tap "dev-project-0-check"
+  tap "clean-go"
+  tap "clean-confirm"
+  clock data
+  expect text "clean-notice" == "Moved 2 items to the Trash. Delete them from the Trash to free 262 KB."
+  expect text "dev-project-0-name" == "web"
+  expect text "dev-cache-0-name" == "npm cache"
+  expect text "clean-total" == "139 KB"
+  tap "clean-back"
+  clock data
+  expect text "dev-summary" == "139 KB in 4 items you can clean up"
+
+test "↑ and ↓ move through Ports, Enter opens a server, and ⌘K opens its actions"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-ports"
+  clock data
+  expect state portAt == -1
+  type "root" key "ArrowDown"
+  expect state portSelected == "4242:3000"
+  type "root" key "ArrowDown"
+  type "root" key "ArrowDown"
+  type "root" key "ArrowDown"
+  expect state portAt == 2
+  type "root" key "ArrowUp"
+  expect state portAt == 1
+  type "root" key "Enter"
+  expect text "port-number" == "5432"
+  tap "port-back"
+  expect state portAt == 1
+  type "root" key "Meta+k"
+  expect state aimedServerPort == 5432
+  expect tree has "port-menu-info"
+
+test "Delete Now deletes for good only what Magnitor moved, and asks first"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  clock data
+  tap "dev-card"
+  tap "clean-none"
+  tap "dev-cache-0-check"
+  tap "clean-go"
+  tap "clean-confirm"
+  clock data
+  expect text "purge-label" == "Delete 164 KB from the Trash Now"
+  tap "purge"
+  expect text "purge-confirm-text" == "Delete the item Magnitor moved to the Trash for good, freeing 164 KB? They can’t be put back. Nothing else in the Trash is touched."
+  tap "purge-cancel"
+  expect tree missing "purge-confirm-text"
+  tap "purge"
+  tap "purge-confirm"
+  clock data
+  expect text "clean-notice" == "Deleted 1 item for good, freeing 164 KB."
+  expect tree missing "purge"
+
+test "Go's module cache can't go to the Trash, so Developer Files runs its command, asked first"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  clock data
+  tap "dev-card"
+  clock data
+  expect text "dev-cmd-go-name" == "Go module cache"
+  expect text "dev-cmd-go-command" == "go clean -modcache"
+  expect text "dev-cmd-go-size" == "4 KB"
+  tap "dev-cmd-go-run"
+  expect text "cmd-confirm-text" == "Run go clean -modcache? Downloaded again when a project builds. Its files are read-only, so it can’t go to the Trash."
+  tap "cmd-cancel"
+  expect tree missing "cmd-confirm-text"
+  tap "dev-cmd-go-run"
+  tap "cmd-confirm"
+  clock data
+  expect text "clean-notice" == "Cleared Go’s module cache, freeing about 4 KB."
+
+test "Settings adds a folder to look in, whose projects Developer Files lists too"
+  at "/settings"
+  tap "scan-add-button"
+  pick "scan-add" "tools/volume"
+  clock data
+  expect state scanFolders.length == 1
+  expect tree has "scan-folder-0"
+  tap "scan-folder-0-remove"
+  expect state scanFolders == []
+  tap "scan-add-button"
+  pick "scan-add" "tools/volume"
+  clock data
+  expect state scanFolders.length == 1
+  tap "settings-done"
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  tap "tab-storage"
+  clock data
+  tap "dev-card"
+  clock data
+  expect text "dev-project-3-name" == "shop"
+  expect text "dev-project-3-size" == "8 KB"
+
+test "the monthly developer files reminder starts counting when alerts go on"
+  at "/settings"
+  expect state remindCheckedAt == 0
+  prefer permission.notifications granted
+  tap "alerts-on"
+  clock +5000
+  clock data
+  expect state remindCheckedAt >= 1
+  expect state reminderScan == false

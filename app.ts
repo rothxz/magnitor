@@ -1,6 +1,8 @@
 // Magnitor: the quick sources. The Rust crate in data/ answers `usage` and `contents`, walking the
 // folders on many threads; this answers the disk's size with `df`, the apps' names from
-// Spotlight and Show in Finder with `open`, and keeps the desktop
+// Spotlight, Show in Finder and a local server's page with `open`, moves Developer Files to the
+// Trash (modules/apple's `trash`, Finder's own, so Put Back works) and deletes for good what it
+// moved there when asked (`purge`), resolves a folder Settings' picker chose, and keeps the desktop
 // widget's reading (`saveWidget`, which the widget's `widgetVitals` reads). Every child runs with
 // the home directory as its working directory, so paths here are relative to it.
 import type { Result, TypeScriptAnswer, TypeScriptSources } from './app.contract.d.ts';
@@ -16,6 +18,8 @@ export const grants = [
   'process.spawn /usr/bin/open',
   'fs.read app:/data/widget.json',
   'fs.write app:/data/widget.json',
+  // A folder Settings' picker chose, as its path on disk (`folderPath`).
+  'fs.read doc:/',
   'device.notifications purpose.notifications',
   'device.global-shortcuts',
 ].join('\n');
@@ -26,6 +30,72 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1e6) return `${Math.round(bytes / 1e3)} KB`;
   const [n, unit] = bytes < 1e9 ? [bytes / 1e6, 'MB'] : bytes < 1e12 ? [bytes / 1e9, 'GB'] : [bytes / 1e12, 'TB'];
   return `${(Math.round(n * 10) / 10).toFixed(1).replace(/\.0$/, '')} ${unit}`;
+}
+
+// What Developer Files may move to the Trash, kept in step with data/src/devclean.rs: a
+// project folder by its name (RULES), or a tool's cache by its path from home (CACHES). The view
+// sends only what the scan found; this refuses anything else, whatever asks.
+const PROJECT_FOLDERS = new Set([
+  'node_modules', '.next', '.nuxt', '.svelte-kit', '.turbo', '.parcel-cache', '.angular', 'target', '.build', 'Pods',
+  'build', '.gradle', '.dart_tool', '.venv', 'venv', '.zig-cache', '_build', 'deps', '.stack-work', 'dist-newstyle',
+]);
+// RULES' `cmake-build-*`: CLion's build folders, by their start.
+const PROJECT_FOLDER_STARTS = ['cmake-build-'];
+
+function projectFolder(name: string): boolean {
+  return PROJECT_FOLDERS.has(name) || PROJECT_FOLDER_STARTS.some((s) => name.startsWith(s) && name.length > s.length);
+}
+const CACHES = new Set([
+  'Library/Developer/Xcode/DerivedData', 'Library/Caches/com.apple.dt.Xcode', 'Library/Developer/CoreSimulator/Caches',
+  'Library/Developer/Xcode/iOS DeviceSupport', 'Library/Developer/Xcode/watchOS DeviceSupport',
+  'Library/Developer/Xcode/tvOS DeviceSupport', 'Library/Developer/Xcode/visionOS DeviceSupport',
+  'Library/Developer/Xcode/Archives', '.npm/_cacache', 'Library/Caches/Yarn', 'Library/pnpm/store', '.bun/install/cache',
+  'Library/Caches/Homebrew', 'Library/Caches/CocoaPods', '.gradle/caches', '.m2/repository', '.cargo/registry',
+  'Library/Caches/pip', 'Library/Caches/go-build', 'Library/Caches/node-gyp', 'Library/Caches/typescript',
+  'Library/Caches/deno', 'Library/Caches/JetBrains', 'Library/Caches/ms-playwright', 'Library/Caches/Cypress',
+  '.cache/puppeteer',
+]);
+
+// A path from home that Developer Files may move: a known cache, or a project folder inside a
+// project the scan walks (not under Library or a hidden folder, as devclean.rs's walk skips).
+// An absolute path is a project folder inside one of the folders Settings adds to the walk.
+export function trashable(path: string, roots: string[] = []): boolean {
+  if (path.startsWith('/')) {
+    const root = roots.find((r) => r.startsWith('/') && r.length > 1 && path.startsWith(r.endsWith('/') ? r : `${r}/`));
+    if (!root) return false;
+    const inner = path.slice(root.length).replace(/^\//, '');
+    const parts = inner.split('/');
+    return parts.length >= 2 && !parts.some((p) => p === '' || p === '.' || p === '..') && projectFolder(parts[parts.length - 1]);
+  }
+  const parts = path.split('/');
+  if (path === '' || parts.some((p) => p === '' || p === '.' || p === '..')) return false;
+  if (CACHES.has(path)) return true;
+  return parts.length >= 2 && parts[0] !== 'Library' && !parts[0].startsWith('.') && projectFolder(parts[parts.length - 1]);
+}
+
+const items = (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`;
+
+// What the Trash took, as the view's notice says it.
+export function trashMessage(asked: number, moved: number, bytes: number): string {
+  if (moved === 0) return asked === 1 ? 'Couldn’t move it to the Trash. It may be in use or protected.' : 'Couldn’t move them to the Trash. They may be in use or protected.';
+  if (moved < asked) return `Moved ${moved} of ${items(asked)} to the Trash. The rest are in use or protected.`;
+  return `Moved ${items(moved)} to the Trash. Delete them from the Trash to free ${formatBytes(bytes)}.`;
+}
+
+// What deleting the moved items did, as the view's notice says it.
+export function purgeMessage(asked: number, deleted: number, bytes: number, denied: boolean): string {
+  if (deleted === 0) {
+    return denied
+      ? 'macOS didn’t let Magnitor into the Trash. Empty it in Finder, or give Magnitor Full Disk Access in System Settings › Privacy & Security.'
+      : 'Nothing was deleted: the items are no longer in the Trash.';
+  }
+  if (deleted < asked) return `Deleted ${deleted} of ${items(asked)}. The rest are no longer in the Trash.`;
+  return `Deleted ${items(deleted)} for good, freeing ${formatBytes(bytes)}.`;
+}
+
+// A local server's page: Ports opens nothing else.
+export function localUrl(url: string): boolean {
+  return /^http:\/\/localhost:\d{1,5}$/.test(url);
 }
 
 // A program that ran and exited with a status answers its output; not starting, a signal
@@ -89,6 +159,51 @@ const sources: TypeScriptSources = {
       return { ok: true };
     } catch {
       return { ok: false };
+    }
+  },
+  // A server's page in the browser, from Ports.
+  openUrl: async ([url]): Promise<Result<'openUrl'>> => {
+    if (!localUrl(url)) return { ok: false };
+    try {
+      await execFile('/usr/bin/open', [url], { encoding: 'utf8', timeout: 10_000 });
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  },
+  // Developer Files to the Trash, by the native module (FileManager's `trashItem`, as Finder
+  // moves them). `bytes` is what the view chose, for the notice.
+  trashItems: async ([paths, bytes, roots], _store, _storage, native): Promise<Result<'trashItems'>> => {
+    const asked = paths.filter((p) => trashable(p, roots));
+    if (asked.length === 0) return { ok: false, moved: [], message: 'Nothing here can be moved to the Trash.' };
+    if (!native?.available) return { ok: false, moved: [], message: 'The Mac app moves files to the Trash.' };
+    try {
+      const reply = (await native.later({ op: 'trash', paths: asked })) as { moved?: unknown };
+      const moved = Array.isArray(reply.moved) ? asked.filter((p) => (reply.moved as unknown[]).includes(p)) : [];
+      // Refused paths count as not moved.
+      return { ok: moved.length > 0, moved, message: trashMessage(paths.length, moved.length, bytes) };
+    } catch (e) {
+      return { ok: false, moved: [], message: `Couldn’t move to the Trash: ${(e as Error).message}` };
+    }
+  },
+  // What Developer Files moved to the Trash this session, deleted for good: the native module
+  // removes only the items its own moves put there, nothing else in the Trash.
+  purgeTrashed: async ([paths, bytes], _store, _storage, native): Promise<Result<'purgeTrashed'>> => {
+    if (!native?.available) return { ok: false, moved: [], message: 'The Mac app empties what it moved.' };
+    try {
+      const reply = (await native.later({ op: 'purge', paths })) as { deleted?: unknown; denied?: unknown };
+      const deleted = Array.isArray(reply.deleted) ? paths.filter((p) => (reply.deleted as unknown[]).includes(p)) : [];
+      return { ok: deleted.length > 0, moved: deleted, message: purgeMessage(paths.length, deleted.length, bytes, reply.denied === true) };
+    } catch (e) {
+      return { ok: false, moved: [], message: `Couldn’t delete them: ${(e as Error).message}` };
+    }
+  },
+  // A folder Settings' picker chose (`doc:/1/Work`), as the walk reads it: its path on disk.
+  folderPath: async ([doc], _store, storage): Promise<Result<'folderPath'>> => {
+    try {
+      return { path: await storage.fs.realpath(doc) };
+    } catch {
+      return { path: '' };
     }
   },
   // The app's reading for the widget, kept until the next; the widget's timeline reloads after it.

@@ -2,7 +2,11 @@
 //! `contents` (what one folder holds), answered by walking the home folder on a few threads
 //! (`walk`); and Activity Monitor's `tasks`, `process` and `endProcess` (`tasks`, reading
 //! the machine with `sample`); and `vitals`, the machine's load alone, for the menu bar, the
-//! alerts and the widget (`vitals`). app.ts answers the rest; app.json places this source on a worker
+//! alerts and the widget (`vitals`); and for developers, `ports` and `stopPort` (the servers
+//! listening, `ports`) and `devFiles` (the project folders and caches a developer can clear,
+//! `devclean`), `devCommands` and `runDevCommand` (what only a tool can free: Go's module
+//! cache, a Docker prune, old simulators, `devtools`, Docker by its Engine, `docker`); and `unusual`, the processes behaving unusually, for the process alerts
+//! (`watchdog`). app.ts answers the rest; app.json places this source on a worker
 //! thread of its own (`rust.placement`), so a walk of many gigabytes never holds up the view.
 //!
 //! A walk is kept for its `generation`, the view's count of Measure Again and Clear Cache: the
@@ -12,12 +16,17 @@ use exact_runner::{Answer, DataError, DataSource, Store, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub mod devclean;
+pub mod devtools;
+pub mod docker;
 pub mod icons;
+pub mod ports;
 pub mod sample;
 pub mod sensors;
 pub mod tasks;
 pub mod vitals;
 pub mod walk;
+pub mod watchdog;
 
 #[allow(dead_code, clippy::all)]
 mod shapes {
@@ -26,7 +35,7 @@ mod shapes {
 use shapes::{AppIcon, Contents, ContractValue, Item, Slice, Usage};
 
 /// The sources this crate answers; app.ts answers the others.
-pub const RUST_SOURCES: &[&str] = &["usage", "contents", "tasks", "process", "endProcess", "vitals", "appIcon", "appGroup", "endApp"];
+pub const RUST_SOURCES: &[&str] = &["usage", "contents", "tasks", "process", "endProcess", "vitals", "appIcon", "appGroup", "endApp", "ports", "stopPort", "devFiles", "devCommands", "runDevCommand", "unusual"];
 
 /// A measured folder: its id in the view, its name, its group, and where it is under home.
 struct Measured {
@@ -54,6 +63,10 @@ pub struct Magnitor {
     walked: HashMap<&'static str, (i64, walk::Folder)>,
     tasks: tasks::TaskManager,
     vitals: vitals::Monitor,
+    ports: ports::PortWatch,
+    dev: devclean::DevCleaner,
+    tools: devtools::DevTools,
+    watchdog: watchdog::Watchdog,
 }
 
 /// The home folder: the agent's stand-in (`--home`) under a drive, else the person's.
@@ -119,7 +132,7 @@ impl DataSource for Magnitor {
     /// Nothing is known before the walk or a reading: every resource is asked at launch.
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         match source {
-            "usage" | "contents" | "tasks" | "process" | "endProcess" | "vitals" | "appIcon" | "appGroup" | "endApp" => Err(DataError::Unavailable("measured at run time".into())),
+            "usage" | "contents" | "tasks" | "process" | "endProcess" | "vitals" | "appIcon" | "appGroup" | "endApp" | "ports" | "stopPort" | "devFiles" | "devCommands" | "runDevCommand" | "unusual" => Err(DataError::Unavailable("measured at run time".into())),
             _ => Err(DataError::UnknownSource(source.into())),
         }
     }
@@ -140,6 +153,31 @@ impl DataSource for Magnitor {
             "process" => Ok(Answer::Now(self.tasks.process(number(0)?, number(1)?).to_value())),
             "vitals" => Ok(Answer::Now(self.vitals.vitals(number(0)?).to_value())),
             "appIcon" => Ok(Answer::Now(AppIcon { icon: icons::icon(text(0)?) }.to_value())),
+            "ports" => Ok(Answer::Now(self.ports.ports(number(0)?).to_value())),
+            "stopPort" => {
+                let force = matches!(args.get(2), Some(Value::Bool(true)));
+                Ok(Answer::Now(self.ports.stop(number(0)?, number(1)?, force).to_value()))
+            }
+            // The generation, then Settings' folders to walk beyond home and to leave out.
+            "devFiles" => {
+                let list = |i: usize| match args.get(i) {
+                    Some(Value::List(items)) => items.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
+                let folders = devclean::Folders::new(&list(1), &list(2));
+                Ok(Answer::Now(self.dev.dev_files(number(0)?, folders, threads()).to_value()))
+            }
+            "devCommands" => Ok(Answer::Now(self.tools.commands(number(0)?, threads()).to_value())),
+            "runDevCommand" => Ok(Answer::Now(self.tools.run(text(0)?).to_value())),
+            // The pulse, the view's time in ms, and its limits: % of a core, seconds, GB.
+            "unusual" => {
+                let float = |i: usize| match args.get(i) {
+                    Some(Value::Number(n)) => Ok(*n),
+                    _ => Err(DataError::BadArguments(source.into())),
+                };
+                let limits = watchdog::Limits { cpu: float(2)?, busy_for: float(3)?, grow_gb: float(4)? };
+                Ok(Answer::Now(self.watchdog.unusual(number(0)?, float(1)?, limits).to_value()))
+            }
             "endProcess" => {
                 let force = matches!(args.get(1), Some(Value::Bool(true)));
                 Ok(Answer::Now(self.tasks.end(number(0)?, force).to_value()))

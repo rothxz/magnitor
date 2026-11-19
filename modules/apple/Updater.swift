@@ -9,26 +9,11 @@
 //
 // A build that is not a signed release (ad hoc, as a local or CI test build is) reports
 // `canInstall: false`: its designated requirement is its own hash, which no update can meet.
-// Under the agent (tests), `check` answers at once without reaching the network.
+// Under the agent (tests), `check` answers at once without reaching the network. Module.swift
+// routes app.ts's requests here.
 import AppKit
 import Foundation
 import Security
-
-final class UpdaterModule: ExactModule {
-    override func later(_ request: [String: Any], reply: ExactReply) {
-        let op = request["op"] as? String ?? ""
-        let url = request["url"] as? String ?? ""
-        let version = request["version"] as? String ?? ""
-        let agent = context.agent
-        Task.detached {
-            switch op {
-            case "check": reply.send(await Updater.check(agent: agent))
-            case "install": reply.send(await Updater.install(url: url, version: version))
-            default: reply.fail("Unknown updater request: \(op)")
-            }
-        }
-    }
-}
 
 enum Updater {
     static let repository = "rothxz/magnitor"
@@ -219,4 +204,3 @@ enum Updater {
     }
 }
 
-let exactModule: ExactModule.Type = UpdaterModule.self

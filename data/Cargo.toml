@@ -1,5 +1,5 @@
 # Magnitor's measuring: the DataSource that answers app.contract's `usage` and `contents`,
-# walking the home folder's directories on a thread per core (docs/reference.md, "Rust data
+# walking the home folder's directories on a few threads (docs/reference.md, "Rust data
 # sources"). app.ts answers the other sources. It is a member of the workspace exact2
 # generates from app.json, which also holds the host crates that link it.
 [package]

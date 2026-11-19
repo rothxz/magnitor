@@ -1,6 +1,6 @@
 //! Magnitor's measuring: app.contract's `usage` (every folder's size, for the pie) and
-//! `contents` (what one folder holds), answered by walking the home folder on a thread per
-//! core (`walk`); and Activity Monitor's `tasks`, `process` and `endProcess` (`tasks`, reading
+//! `contents` (what one folder holds), answered by walking the home folder on a few threads
+//! (`walk`); and Activity Monitor's `tasks`, `process` and `endProcess` (`tasks`, reading
 //! the machine with `sample`); and `vitals`, the machine's load alone, for the menu bar, the
 //! alerts and the widget (`vitals`). app.ts answers the rest; app.json places this source on a worker
 //! thread of its own (`rust.placement`), so a walk of many gigabytes never holds up the view.
@@ -64,8 +64,11 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// The walk's threads: at most four. Nearly all a walk's time is the kernel's, and past four
+/// threads they mostly wait on each other there: ten took four times the CPU of four for a
+/// second less (`walk::tests::bench`).
 fn threads() -> usize {
-    std::thread::available_parallelism().map_or(4, |n| n.get())
+    std::thread::available_parallelism().map_or(4, |n| n.get()).min(4)
 }
 
 impl Magnitor {

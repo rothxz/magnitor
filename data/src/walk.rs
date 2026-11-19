@@ -1,11 +1,13 @@
 //! A parallel `du`: the bytes on disk under each folder, by its top-level entries, measured by
-//! a thread per core sharing one queue of directories.
+//! a few threads sharing one queue of directories, at utility QoS on macOS, where each
+//! directory is read in bulk (`getattrlistbulk`).
 //!
 //! A file counts its allocated blocks (`st_blocks` × 512), as `du` and Finder's "on disk" do,
 //! so a sparse or compressed file counts what it takes. Symbolic links are not followed, and
 //! a directory that cannot be read (another user's, or one macOS's privacy protection keeps
 //! from this app) is left out, as `du` leaves it out after saying so.
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex};
@@ -51,18 +53,16 @@ pub fn measure(roots: &[PathBuf], threads: usize) -> Vec<Folder> {
     let mut names: Vec<Vec<String>> = vec![Vec::new(); roots.len()];
     let mut tasks = Vec::new();
     let mut tally = Tally { loose: vec![0; roots.len()], ..Tally::default() };
+    let mut scratch = Scratch::new();
     for (root, path) in roots.iter().enumerate() {
-        let Ok(entries) = std::fs::read_dir(path) else { continue };
-        folders[root].found = true;
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else { continue };
-            if kind.is_dir() {
-                names[root].push(entry.file_name().to_string_lossy().into_owned());
-                tasks.push(Task { dir: entry.path(), root, child: Some(names[root].len() - 1) });
-            } else if let Ok(meta) = entry.metadata() {
-                tally.loose[root] += on_disk(&meta);
-            }
+        if !path.is_dir() {
+            continue;
         }
+        folders[root].found = true;
+        tally.loose[root] = list(path, &mut scratch, |name| {
+            names[root].push(name.to_string_lossy().into_owned());
+            tasks.push(Task { dir: path.join(name), root, child: Some(names[root].len() - 1) });
+        });
     }
     // The largest folders first: the queue is a stack, so they are taken last otherwise.
     tasks.reverse();
@@ -100,8 +100,10 @@ pub fn measure(roots: &[PathBuf], threads: usize) -> Vec<Folder> {
 /// One thread: take a directory, add up its files, queue its directories; stop once no
 /// directory is left and no thread is reading one (which could queue more).
 fn work(queue: &Mutex<Queue>, ready: &Condvar, roots: usize) -> Tally {
+    lower_priority();
     let mut tally = Tally { loose: vec![0; roots], ..Tally::default() };
     let mut found = Vec::new();
+    let mut scratch = Scratch::new();
     let mut reading = false;
     loop {
         let task = {
@@ -129,7 +131,7 @@ fn work(queue: &Mutex<Queue>, ready: &Condvar, roots: usize) -> Tally {
         };
         let Some(task) = task else { return tally };
         reading = true;
-        let bytes = read(&task.dir, &task, &mut found);
+        let bytes = read(&task.dir, &task, &mut found, &mut scratch);
         match task.child {
             Some(child) => *tally.children.entry((task.root, child)).or_default() += bytes,
             None => tally.loose[task.root] += bytes,
@@ -138,23 +140,171 @@ fn work(queue: &Mutex<Queue>, ready: &Condvar, roots: usize) -> Tally {
 }
 
 /// The files directly in `dir`; its directories go to `found` for any thread to read.
-fn read(dir: &Path, task: &Task, found: &mut Vec<Task>) -> u64 {
+fn read(dir: &Path, task: &Task, found: &mut Vec<Task>, scratch: &mut Scratch) -> u64 {
+    list(dir, scratch, |name| found.push(Task { dir: dir.join(name), root: task.root, child: task.child }))
+}
+
+/// The bytes the files directly in `dir` take on disk; each directory in it named to `on_dir`.
+/// A directory that cannot be read takes 0.
+fn list(dir: &Path, scratch: &mut Scratch, on_dir: impl FnMut(&OsStr)) -> u64 {
+    #[cfg(target_os = "macos")]
+    return bulk::list(dir, scratch, on_dir);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = scratch;
+        list_each(dir, on_dir)
+    }
+}
+
+/// `list` by `readdir` and an `lstat` per file: everywhere but macOS, and the tests' reference.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn list_each(dir: &Path, mut on_dir: impl FnMut(&OsStr)) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
     let mut bytes = 0;
     for entry in entries.flatten() {
         let Ok(kind) = entry.file_type() else { continue };
         if kind.is_dir() {
-            found.push(Task { dir: entry.path(), root: task.root, child: task.child });
+            on_dir(&entry.file_name());
         } else if let Ok(meta) = entry.metadata() {
             // `DirEntry::metadata` does not follow a symbolic link: a link counts its own size.
-            bytes += on_disk(&meta);
+            bytes += meta.blocks() * 512;
         }
     }
     bytes
 }
 
-fn on_disk(meta: &std::fs::Metadata) -> u64 {
-    meta.blocks() * 512
+/// A thread's buffer for `getattrlistbulk`, 8-byte aligned as its entries are; kept across
+/// directories so a walk allocates it once a thread.
+pub struct Scratch(#[cfg_attr(not(target_os = "macos"), allow(dead_code))] Vec<u64>);
+
+impl Scratch {
+    fn new() -> Scratch {
+        // 64 KiB: some hundreds of entries a call, so most directories take one.
+        Scratch(vec![0; 64 * 1024 / 8])
+    }
+}
+
+/// macOS's `getattrlistbulk`: a directory's entries with their type and size on disk, a buffer
+/// of them a call, where `readdir` takes an `lstat` more for each file. Nearly all a walk's time
+/// is the kernel's, so this is most of what it costs.
+#[cfg(target_os = "macos")]
+mod bulk {
+    use super::Scratch;
+    use std::ffi::{c_int, c_void, OsStr};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::path::Path;
+
+    /// `struct attrlist` (sys/attr.h).
+    #[repr(C)]
+    struct AttrList {
+        bitmapcount: u16,
+        reserved: u16,
+        commonattr: u32,
+        volattr: u32,
+        dirattr: u32,
+        fileattr: u32,
+        forkattr: u32,
+    }
+
+    extern "C" {
+        fn getattrlistbulk(dirfd: c_int, list: *mut AttrList, buf: *mut c_void, size: usize, options: u64) -> c_int;
+    }
+
+    const ATTR_BIT_MAP_COUNT: u16 = 5;
+    const ATTR_CMN_NAME: u32 = 0x0000_0001;
+    const ATTR_CMN_OBJTYPE: u32 = 0x0000_0008;
+    const ATTR_CMN_ERROR: u32 = 0x2000_0000;
+    const ATTR_CMN_RETURNED_ATTRS: u32 = 0x8000_0000;
+    // Every fork's bytes on disk: what `st_blocks` counts.
+    const ATTR_FILE_ALLOCSIZE: u32 = 0x0000_0004;
+    // Every requested attribute packed, valid or not, so each sits at a fixed offset.
+    const FSOPT_PACK_INVAL_ATTRS: u64 = 0x0000_0008;
+    const O_DIRECTORY: i32 = 0x0010_0000;
+    const VDIR: u32 = 2;
+    const EINTR: i32 = 4;
+
+    // An entry, packed in the order sys/attr.h gives: its length; the attributes returned
+    // (five groups); the error, which follows them; the name's reference (offset from itself,
+    // length with the NUL); the type; the size on disk. Each 4-byte aligned.
+    const RETURNED_FILE: usize = 4 + 12;
+    const ERROR: usize = 24;
+    const NAME: usize = 28;
+    const TYPE: usize = 36;
+    const SIZE: usize = 40;
+    const FIXED: usize = 48;
+
+    fn u32_at(b: &[u8], at: usize) -> u32 {
+        u32::from_ne_bytes(b[at..at + 4].try_into().unwrap())
+    }
+
+    pub fn list(dir: &Path, scratch: &mut Scratch, mut on_dir: impl FnMut(&OsStr)) -> u64 {
+        let Ok(file) = std::fs::OpenOptions::new().read(true).custom_flags(O_DIRECTORY).open(dir) else { return 0 };
+        let mut attrs = AttrList {
+            bitmapcount: ATTR_BIT_MAP_COUNT,
+            reserved: 0,
+            commonattr: ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME | ATTR_CMN_ERROR | ATTR_CMN_OBJTYPE,
+            volattr: 0,
+            dirattr: 0,
+            fileattr: ATTR_FILE_ALLOCSIZE,
+            forkattr: 0,
+        };
+        let size = scratch.0.len() * 8;
+        let mut bytes = 0;
+        loop {
+            // SAFETY: `attrs` is a filled attrlist and the buffer is `size` bytes, 8-aligned.
+            let n = unsafe { getattrlistbulk(file.as_raw_fd(), &mut attrs, scratch.0.as_mut_ptr().cast(), size, FSOPT_PACK_INVAL_ATTRS) };
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(EINTR) {
+                continue;
+            }
+            if n <= 0 {
+                return bytes;
+            }
+            // SAFETY: the u64 buffer read as the bytes it holds.
+            let buf: &[u8] = unsafe { std::slice::from_raw_parts(scratch.0.as_ptr().cast(), size) };
+            let mut at = 0;
+            for _ in 0..n {
+                let Some(entry) = buf.get(at..).filter(|e| e.len() >= FIXED) else { return bytes };
+                let len = u32_at(entry, 0) as usize;
+                if len < FIXED || len > entry.len() {
+                    return bytes;
+                }
+                let entry = &entry[..len];
+                at += len;
+                if u32_at(entry, ERROR) != 0 {
+                    continue;
+                }
+                if u32_at(entry, TYPE) == VDIR {
+                    let start = NAME as i64 + i64::from(u32_at(entry, NAME) as i32);
+                    let name_len = u32_at(entry, NAME + 4) as usize;
+                    let Some(name) = usize::try_from(start).ok().and_then(|s| entry.get(s..s + name_len)) else { continue };
+                    // Without its NUL.
+                    let name = name.strip_suffix(&[0]).unwrap_or(name);
+                    if !name.is_empty() {
+                        on_dir(OsStr::from_bytes(name));
+                    }
+                } else if u32_at(entry, RETURNED_FILE) & ATTR_FILE_ALLOCSIZE != 0 {
+                    let size = i64::from_ne_bytes(entry[SIZE..SIZE + 8].try_into().unwrap());
+                    bytes += size.max(0) as u64;
+                }
+            }
+        }
+    }
+}
+
+/// The walk's threads, on macOS, at utility QoS: the scheduler favours the efficiency cores
+/// and gives way to what the person is doing, as Spotlight's indexing does.
+fn lower_priority() {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn pthread_set_qos_class_self_np(qos: u32, relative: std::ffi::c_int) -> std::ffi::c_int;
+        }
+        const QOS_CLASS_UTILITY: u32 = 0x11;
+        // SAFETY: it sets only the calling thread's class.
+        unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) };
+    }
 }
 
 #[cfg(test)]
@@ -179,5 +329,70 @@ mod tests {
         assert_eq!(folders[0].loose, 4096);
         assert_eq!(folders[0].total, 32768);
         assert!(!folders[1].found);
+    }
+
+    /// The bulk read counts what `lstat` does, and names the same directories: a link its own
+    /// size, a sparse file its blocks, the system's compressed files what they take.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bulk_matches_lstat() {
+        let dir = std::env::temp_dir().join(format!("magnitor-bulk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("empty"), b"").unwrap();
+        std::fs::write(dir.join("small"), b"hi").unwrap();
+        std::fs::write(dir.join("block"), vec![7u8; 10_000]).unwrap();
+        let sparse = std::fs::File::create(dir.join("sparse")).unwrap();
+        sparse.set_len(50_000_000).unwrap();
+        std::os::unix::fs::symlink("small", dir.join("link")).unwrap();
+        std::os::unix::fs::symlink("sub", dir.join("dir-link")).unwrap();
+        // Many entries: more than one buffer's worth.
+        for i in 0..3000 {
+            std::fs::create_dir(dir.join("sub").join(format!("d{i:05}-{}", "x".repeat(40)))).unwrap();
+        }
+        let roots = [dir.clone(), dir.join("sub"), "/usr/bin".into(), "/usr/lib".into(), "/System/Library/CoreServices".into(), "/nonexistent".into()];
+        for root in &roots {
+            let mut scratch = Scratch::new();
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            let bulk = bulk::list(root, &mut scratch, |n| a.push(n.to_owned()));
+            let each = list_each(root, |n| b.push(n.to_owned()));
+            a.sort();
+            b.sort();
+            assert_eq!(bulk, each, "bytes in {}", root.display());
+            assert_eq!(a, b, "directories in {}", root.display());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CPU and wall time of a walk of real folders, `MAGNITOR_BENCH` (colon-separated):
+    /// `MAGNITOR_BENCH=~/Library/Caches:… cargo test -p magnitor-data --release bench -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench() {
+        let Some(roots) = std::env::var_os("MAGNITOR_BENCH") else { return };
+        let roots: Vec<PathBuf> = std::env::split_paths(&roots).collect();
+        let threads = std::env::var("MAGNITOR_THREADS").ok().and_then(|t| t.parse().ok()).unwrap_or(4);
+        let cpu = || {
+            let mut usage = std::mem::MaybeUninit::<[i64; 18]>::zeroed();
+            extern "C" {
+                fn getrusage(who: i32, usage: *mut [i64; 18]) -> i32;
+            }
+            // RUSAGE_SELF; ru_utime and ru_stime are the first two timevals.
+            unsafe { getrusage(0, usage.as_mut_ptr()) };
+            let u = unsafe { usage.assume_init() };
+            (u[0] as f64 + u[1] as f64 / 1e6, u[2] as f64 + u[3] as f64 / 1e6)
+        };
+        let (user0, sys0) = cpu();
+        let start = std::time::Instant::now();
+        let folders = measure(&roots, threads);
+        let wall = start.elapsed().as_secs_f64();
+        let (user1, sys1) = cpu();
+        let total: u64 = folders.iter().map(|f| f.total).sum();
+        println!(
+            "threads {threads}: {total} bytes · wall {wall:.2}s · user {:.2}s · system {:.2}s · CPU {:.0}%",
+            user1 - user0,
+            sys1 - sys0,
+            (user1 - user0 + sys1 - sys0) / wall * 100.0
+        );
     }
 }

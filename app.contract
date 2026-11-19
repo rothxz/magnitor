@@ -75,7 +75,7 @@ shape Proc
   mine: bool
   // The app bundle it runs in ("" for a process outside an app), whose icon `ProcIcon` asks
   // for once. The icons themselves stay out of this reading: as data URLs they were nearly all
-  // of each tick's answer, sent and compared again every three seconds.
+  // of each tick’s answer, sent and compared again every few seconds.
   app: string
   // An app's processes as one row (grouped): `pid` is its main process's, `name` the app's,
   // `count` how many, and `cpu` and `memory` theirs added up. One process: false and 1.
@@ -350,16 +350,25 @@ component Magnitor
   state aimedGroup = false
   state aimedMine = false
   // `transient`: a reading is stale by the next tick, so it is never kept in the device's
-  // storage for a later launch (which would write it out every three seconds).
+  // storage for a later launch (which would write it out every few seconds).
   resource tasks = tasks(tick, sort, query, grouped) when isMain and tab == "tasks" as shape Tasks else empty() transient
   resource info = process(inspected, tick) when tab == "tasks" and inspected != -1 as shape ProcInfo else empty()
   // Each row's app icon, asked once per app (`key`): a tick that reorders the rows or keeps
   // an app's processes asks nothing, and an app that joins the list asks for its own alone.
   resource procIcons = appIcon(p.app) for p in tasks.processes key=p.app as shape AppIcon
   mutation ended as shape Ended then afterEnd
-  // Every three seconds: each reading lists every process and redraws the list.
-  task sampler when tab == "tasks" and shown
+  // Every `refresh` seconds (Settings, three unless chosen): each reading lists every process
+  // and redraws the list. A timer's interval is a literal, so each choice has its own; three
+  // also stands for a kept value that is no longer offered.
+  derive sampling = tab == "tasks" and shown
+  task sampler1 when sampling and refresh == 1
+    every(1000, sample)
+  task sampler2 when sampling and refresh == 2
+    every(2000, sample)
+  task sampler3 when sampling and not [1, 2, 5].includes(refresh)
     every(3000, sample)
+  task sampler5 when sampling and refresh == 5
+    every(5000, sample)
 
   resource page = exactPage() as shape Page
   // The date now is the clock's epoch at zero plus performanceNow().
@@ -384,6 +393,11 @@ component Magnitor
   state sustain = 60 persist
   // Whether the main window checks GitHub for a new version, at launch and every six hours.
   state autoUpdate = true persist
+  // How often, in seconds, Activity Monitor reads the machine while it is open: 1, 2, 3 or 5,
+  // Activity Monitor's own choices and Magnitor's three. Each reading costs a little CPU, so a
+  // longer one spends less. Not longer than five: `tasks.rs` takes a reading over ten seconds
+  // old as no base for a rate, and would wait a second for a fresh one each time.
+  state refresh = 3 persist
 
   // Updates: asked afresh each launch (the clock's epoch differs) and at each pulse. The
   // Settings window asks when it opens, and on Check Now.
@@ -519,6 +533,8 @@ component Magnitor
     diskLimit = number(v)
   action setSustain(v: string)
     sustain = number(v)
+  action setRefresh(v: string)
+    refresh = number(v)
   action setAutoUpdate(on: bool)
     autoUpdate = on
   action recheckUpdate
@@ -1107,6 +1123,16 @@ component Magnitor
                           image trayIconSymbol(icon)
                 footer
                   text (trayShow == "icon" ? "The icon Magnitor shows in the menu bar." : "The menu bar shows your Mac’s load, read every two seconds.") testId="tray-note"
+              section
+                header
+                  text "Activity Monitor"
+                row
+                  text "Update Every"
+                  select value=`${refresh}` change=setRefresh aria-label="Update Activity Monitor every" testId="refresh"
+                    for n in [1, 2, 3, 5] key=n
+                      option sustainText(n) value=`${n}`
+                footer
+                  text "How often the process list reads your Mac while it’s open. Less often uses less CPU." testId="refresh-note"
               section
                 header
                   text "Desktop Widget"

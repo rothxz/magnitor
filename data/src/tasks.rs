@@ -15,13 +15,18 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// Rows the list shows; a search finds the rest.
 pub const SHOWN: usize = 50;
-/// CPU readings the graph keeps: two minutes at the view's three seconds.
+/// CPU readings the graph keeps: two minutes at the view's default three seconds (Settings'
+/// Update Every: 40 seconds at one, over three minutes at five).
 const HISTORY: usize = 40;
 /// A reading older than this is no base for a rate.
 const STALE: Duration = Duration::from_secs(10);
 /// The gap between the first reading and the second. It falls while the popover opens, the
 /// app's own busiest moment: a short gap would show Magnitor's own % CPU many times its average.
 const SETTLE: Duration = Duration::from_millis(1000);
+/// How often `ps` reads the other users' processes (`sample::take`): every third tick at the
+/// view's default three seconds, every other at five, every eighth at one. It is most of a
+/// reading's cost; between, those rows keep their rate.
+const OTHERS_EVERY: Duration = Duration::from_secs(8);
 
 /// A process with its rate.
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +46,8 @@ pub struct Load {
 struct Reading {
     tick: i64,
     at: Instant,
+    /// When `ps` last read the other users' processes: this reading, or one before it.
+    others_at: Instant,
     sample: RawSample,
     rows: Vec<Row>,
     load: Load,
@@ -59,28 +66,33 @@ impl TaskManager {
         if self.last.as_ref().is_some_and(|r| r.tick == tick) {
             return;
         }
+        // A fresh base asks `ps` too, and so does the reading after it: its rows have no rate yet.
         let base = match self.last.take() {
-            Some(r) if r.at.elapsed() < STALE => Ok((r.at, r.sample)),
-            _ => sample::take().map(|s| {
+            Some(r) if r.at.elapsed() < STALE => Ok((r.at, r.others_at, r.sample, r.rows)),
+            _ => sample::take(true).map(|s| {
                 std::thread::sleep(SETTLE);
-                (Instant::now() - SETTLE, s)
+                let then = Instant::now() - SETTLE;
+                (then, then, s, Vec::new())
             }),
         };
-        let reading = base.and_then(|(then, before)| {
-            let now = sample::take()?;
-            Ok((then, before, now))
+        let reading = base.and_then(|(then, others_then, before, previous)| {
+            let others = previous.is_empty() || others_then.elapsed() >= OTHERS_EVERY;
+            let now = sample::take(others)?;
+            Ok((then, others_then, before, previous, others, now))
         });
         match reading {
-            Ok((then, before, now)) => {
+            Ok((then, others_then, before, previous, others, now)) => {
                 let at = Instant::now();
-                let rows = rates(&before.procs, &now.procs, (at - then).as_nanos() as f64);
+                let others_ns = others.then(|| (at - others_then).as_nanos() as f64);
+                let rows = rates(&before.procs, &now.procs, (at - then).as_nanos() as f64, others_ns, &previous);
+                let others_at = if others { at } else { others_then };
                 let load = load(&before.system, &now.system);
                 if self.history.len() == HISTORY {
                     self.history.pop_front();
                 }
                 self.history.push_back(load);
                 self.error.clear();
-                self.last = Some(Reading { tick, at, sample: now, rows, load });
+                self.last = Some(Reading { tick, at, others_at, sample: now, rows, load });
             }
             Err(e) => self.error = e,
         }
@@ -374,13 +386,31 @@ pub struct AppGroup {
     pub members: Vec<i32>,
 }
 
+/// The app each row belongs to, by pid ("" for none): the bundle its program lies in
+/// (`app_bundle`), or, for a program outside every bundle, its parent's. Raycast Backend, a
+/// node program in Application Support that Raycast starts, is Raycast's. One level only: a
+/// terminal's shell is started by `/usr/bin/login`, outside the terminal's bundle, so the
+/// commands run in it stay rows of their own.
+pub fn apps_of(rows: &[Row]) -> HashMap<i32, String> {
+    let own: HashMap<i32, String> = rows.iter().map(|r| (r.raw.pid, app_bundle(&r.raw.path))).collect();
+    rows.iter()
+        .map(|r| {
+            let app = &own[&r.raw.pid];
+            let app = if app.is_empty() { own.get(&r.raw.ppid).cloned().unwrap_or_default() } else { app.clone() };
+            (r.raw.pid, app)
+        })
+        .collect()
+}
+
 /// The rows with each app that runs two or more processes as one (Raycast's app grouping): a
-/// helper lies in its app's bundle (`app_bundle`), so VS Code's main process and its twenty
-/// helpers are one row. A process outside an app, or an app's only one, stays as it is.
+/// helper lies in its app's bundle, or was started by its app (`apps_of`), so VS Code's main
+/// process and its twenty helpers are one row. A process outside an app, or an app's only one,
+/// stays as it is.
 pub fn group_apps(rows: &[Row]) -> (Vec<Row>, HashMap<i32, AppGroup>) {
-    let mut by_app: HashMap<String, Vec<&Row>> = HashMap::new();
+    let apps = apps_of(rows);
+    let mut by_app: HashMap<&str, Vec<&Row>> = HashMap::new();
     for r in rows {
-        let app = app_bundle(&r.raw.path);
+        let app = &apps[&r.raw.pid];
         if !app.is_empty() {
             by_app.entry(app).or_default().push(r);
         }
@@ -388,8 +418,8 @@ pub fn group_apps(rows: &[Row]) -> (Vec<Row>, HashMap<i32, AppGroup>) {
     let mut entries = Vec::new();
     let mut groups = HashMap::new();
     for r in rows {
-        let app = app_bundle(&r.raw.path);
-        match by_app.get(&app) {
+        let app = apps[&r.raw.pid].clone();
+        match by_app.get(app.as_str()) {
             Some(members) if members.len() >= 2 => {
                 let main = main_process(&app, members);
                 if r.raw.pid != main.raw.pid {
@@ -404,12 +434,13 @@ pub fn group_apps(rows: &[Row]) -> (Vec<Row>, HashMap<i32, AppGroup>) {
     (entries, groups)
 }
 
-/// The processes running from the app at `app`.
+/// The processes of the app at `app`, as the grouped list counts them (`apps_of`).
 fn members_of<'a>(rows: &'a [Row], app: &str) -> Vec<&'a Row> {
     if app.is_empty() {
         return Vec::new();
     }
-    rows.iter().filter(|r| app_bundle(&r.raw.path) == app).collect()
+    let apps = apps_of(rows);
+    rows.iter().filter(|r| apps[&r.raw.pid] == app).collect()
 }
 
 /// The app's main process: one whose parent is outside the app, its bundle's own executable
@@ -475,10 +506,20 @@ pub fn app_bundle(path: &str) -> String {
 
 /// Each process in `now` with its % CPU since `before`, `elapsed_ns` earlier. A process new
 /// since then, or a pid reused by another, starts at 0.
-pub fn rates(before: &[RawProc], now: &[RawProc], elapsed_ns: f64) -> Vec<Row> {
+///
+/// The other users' processes (not `detailed`) come from `ps`, which a reading asks only now and
+/// then (`OTHERS_EVERY`): when it did, `others_ns` is the time since it last did, which their
+/// `before` CPU time is from; when it did not (`None`), each keeps its rate in `previous`.
+pub fn rates(before: &[RawProc], now: &[RawProc], elapsed_ns: f64, others_ns: Option<f64>, previous: &[Row]) -> Vec<Row> {
     let then: HashMap<i32, &RawProc> = before.iter().map(|p| (p.pid, p)).collect();
+    let kept: HashMap<i32, f64> = if others_ns.is_none() { previous.iter().filter(|r| !r.raw.detailed).map(|r| (r.raw.pid, r.cpu)).collect() } else { HashMap::new() };
     now.iter()
         .map(|p| {
+            let elapsed_ns = match (p.detailed, others_ns) {
+                (true, _) => elapsed_ns,
+                (false, Some(ns)) => ns,
+                (false, None) => return Row { raw: p.clone(), cpu: kept.get(&p.pid).copied().unwrap_or(0.0) },
+            };
             let cpu = match then.get(&p.pid) {
                 Some(b) if b.started == p.started && p.cpu_ns >= b.cpu_ns && elapsed_ns > 0.0 => (p.cpu_ns - b.cpu_ns) as f64 / elapsed_ns * 100.0,
                 _ => 0.0,
@@ -521,7 +562,7 @@ pub fn totals(rows: &[&Row]) -> (String, String) {
 /// The figures are compared as the list shows them (`percent`, `format_memory`), not as read:
 /// most processes idle at a "0.0" whose raw value differs at every reading, and ordering those
 /// by noise reshuffled the list each tick, so the view moved, made and dropped dozens of rows
-/// every three seconds. Compared as shown, a row moves only when what it shows changes.
+/// every tick. Compared as shown, a row moves only when what it shows changes.
 pub fn sorted<'a>(mut rows: Vec<&'a Row>, sort: &str) -> Vec<&'a Row> {
     let by_name = |a: &Row, b: &Row| a.raw.name.to_lowercase().cmp(&b.raw.name.to_lowercase()).then(a.raw.pid.cmp(&b.raw.pid));
     match sort {
@@ -673,12 +714,27 @@ mod tests {
         let mut reused = proc(11, "b2", 9, 0);
         reused.started = 200;
         let now = [proc(10, "a", 3_000_000_000, 0), reused, proc(13, "new", 7_000_000_000, 0)];
-        let rows = rates(&before, &now, 1e9);
+        let rows = rates(&before, &now, 1e9, Some(1e9), &[]);
         // Two seconds of CPU in one: two cores busy.
         assert_eq!(rows[0].cpu, 200.0);
         assert_eq!(rows[1].cpu, 0.0, "a reused pid starts over");
         assert_eq!(rows[2].cpu, 0.0, "a new process starts at 0");
         assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn a_ps_process_is_rated_since_ps_last_ran_and_keeps_its_rate_between() {
+        let other = |pid, cpu_ns| RawProc { detailed: false, ..proc(pid, "root's", cpu_ns, 0) };
+        let mine = |cpu_ns| proc(10, "mine", cpu_ns, 0);
+        // `ps` ran three seconds ago: a second of CPU since is a third of a core; mine's gap is one.
+        let rows = rates(&[mine(0), other(20, 1_000_000_000)], &[mine(500_000_000), other(20, 2_000_000_000)], 1e9, Some(3e9), &[]);
+        assert_eq!(rows[0].cpu, 50.0);
+        assert_eq!((rows[1].cpu * 10.0).round(), 333.0);
+        // A reading `ps` sat out: its rows are its last answer, at the rate they had.
+        let later = rates(&[mine(500_000_000), other(20, 2_000_000_000)], &[mine(1_500_000_000), other(20, 2_000_000_000), other(21, 0)], 1e9, None, &rows);
+        assert_eq!(later[0].cpu, 100.0);
+        assert_eq!(later[1].cpu, rows[1].cpu);
+        assert_eq!(later[2].cpu, 0.0, "one ps has not rated yet starts at 0");
     }
 
     #[test]
@@ -766,6 +822,35 @@ mod tests {
         assert_eq!(names(find(&entries, &groups, &rows, "", 20)), ["launchd", "Visual Studio Code"]);
         // Added up, a search's total counts the app's every process.
         assert_eq!(totals(&find(&entries, &groups, &rows, "code", -1)), ("23.5".to_string(), "900.0 MB".to_string()));
+    }
+
+    #[test]
+    fn a_program_an_app_starts_from_outside_its_bundle_is_the_apps() {
+        const MB: u64 = 1 << 20;
+        let raycast = "/Applications/Raycast.app";
+        let terminal = "/System/Applications/Utilities/Terminal.app";
+        let rows = vec![
+            in_app(1, 0, "launchd", "/sbin/launchd", 0.0, 10 * MB),
+            in_app(10, 1, "Raycast", &format!("{raycast}/Contents/MacOS/Raycast"), 1.0, 49 * MB),
+            in_app(11, 10, "Raycast Backend", "/Users/me/Library/Application Support/com.raycast.macos/node/bin/node", 0.5, 109 * MB),
+            in_app(12, 1, "com.raycast.macos.Pasteboard", &format!("{raycast}/Contents/XPCServices/Raycast Pasteboard.xpc/Contents/MacOS/com.raycast.macos.Pasteboard"), 0.0, 8 * MB),
+            // A terminal's login and shell, and a build run in it.
+            in_app(20, 1, "Terminal", &format!("{terminal}/Contents/MacOS/Terminal"), 0.5, 80 * MB),
+            in_app(21, 20, "login", "/usr/bin/login", 0.0, MB),
+            in_app(22, 21, "zsh", "/bin/zsh", 0.0, 2 * MB),
+            in_app(23, 22, "cargo", "/Users/me/.cargo/bin/cargo", 90.0, 300 * MB),
+        ];
+        let (entries, groups) = group_apps(&rows);
+        let names: Vec<_> = entries.iter().map(|e| e.raw.name.as_str()).collect();
+        assert_eq!(names, ["launchd", "Raycast", "Terminal", "zsh", "cargo"]);
+        assert_eq!(groups[&10].members, [10, 11, 12]);
+        assert_eq!(entries[1].raw.memory, 166 * MB);
+        assert_eq!(groups[&20].members, [20, 21]);
+        // The inspector, Quit All and the list count the same processes.
+        let members: Vec<i32> = members_of(&rows, raycast).iter().map(|r| r.raw.pid).collect();
+        assert_eq!(members, [10, 11, 12]);
+        // The process Raycast started is not its main one.
+        assert_eq!(main_process(raycast, &members_of(&rows, raycast)).raw.pid, 10);
     }
 
     #[test]

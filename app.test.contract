@@ -140,6 +140,22 @@ test "Activity Monitor reads again while it is open"
   expect state tick >= 1
   expect state tasks.error == ""
 
+test "Activity Monitor reads as often as Settings says, and keeps the choice"
+  at "/settings"
+  expect state refresh == 3
+  type "refresh" "5"
+  expect state refresh == 5
+  reload
+  expect state refresh == 5
+  clock +2000 real
+  tap "status-item"
+  clock settle
+  clock data
+  clock +3100 real
+  expect state tick == 0
+  clock +2000 real
+  expect state tick == 1
+
 test "a search finds Magnitor itself, which quits only from Quit Magnitor"
   clock +2000 real
   tap "status-item"

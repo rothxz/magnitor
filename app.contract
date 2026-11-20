@@ -1,7 +1,11 @@
-// Magnitor: the view. Two tabs under a segmented control: Activity Monitor (processes, CPU
-// and memory, after the Mac's own) and Storage. The Rust crate in data/ measures the folders and lists what is
-// in each, walking them on many threads, and reads the processes, CPU and memory; app.ts
-// answers the disk's size, the apps' names and Show in Finder. On macOS the app lives in the menu bar (app.json's
+// Magnitor: the view. Three tabs under a segmented control: Activity (processes, CPU and
+// memory, after the Mac's own Activity Monitor), Storage, and Ports (the servers listening on
+// this Mac, for a developer: what holds port 3000, opened in the browser or stopped). Storage
+// leads to Developer Files: the project folders (`node_modules`, `target`) and the tools' caches
+// a developer can clear, moved to the Trash. The Rust crate in data/ measures the folders and lists what is
+// in each, walking them on many threads, reads the processes, CPU and memory, the ports, and
+// finds the developer files; app.ts answers the disk's size, the apps' names, Show in Finder,
+// opening a page and the Trash. On macOS the app lives in the menu bar (app.json's
 // `accessory`) and shows no window: the status item opens the `stats` popover,
 // AppKit's NSPopover pointing at the item, with the system's material (Liquid
 // Glass on macOS 26 and later). A folder's row opens its contents in the popover.
@@ -9,7 +13,8 @@
 // The gear in the popover's footer (and ⌘,) opens Settings, the Mac's Settings window: a
 // keyboard shortcut that opens the popover from any app, what the menu bar item shows, the
 // desktop widget (app.json's `widgets`, drawn by `VitalsWidget` from the reading `saveWidget`
-// keeps) and alerts, a notification when the CPU, memory or free disk space crosses a limit.
+// keeps) and alerts, a notification when the CPU, memory or free disk space crosses a limit, or
+// one process stays busy or its memory keeps growing (`unusual`, the Rust crate's).
 // Settings are `persist` states, which the two windows share; the main window alone watches
 // the machine (`vitals`, the Rust crate's) and holds the shortcut.
 use globalShortcut, checkGlobalShortcut, globalshortcut, GlobalShortcut, GlobalShortcutCheck, GlobalShortcutEvent from "@exact/global-shortcuts"
@@ -75,7 +80,7 @@ shape Proc
   mine: bool
   // The app bundle it runs in ("" for a process outside an app), whose icon `ProcIcon` asks
   // for once. The icons themselves stay out of this reading: as data URLs they were nearly all
-  // of each tick's answer, sent and compared again every three seconds.
+  // of each tick’s answer, sent and compared again every few seconds.
   app: string
   // An app's processes as one row (grouped): `pid` is its main process's, `name` the app's,
   // `count` how many, and `cpu` and `memory` theirs added up. One process: false and 1.
@@ -155,6 +160,97 @@ shape AppInfo
   // Each process, busiest first.
   processes: Proc[]
 
+// A port a process of this user's listens on (data/src/ports.rs): one row of Ports.
+shape Server
+  pid: number
+  port: number
+  // What a person started: "vite", "next dev", "manage.py runserver", or an app's name.
+  name: string
+  // The executable: "node".
+  process: string
+  // The command it was started with, the home folder as "~".
+  command: string
+  // Its working directory, "~/Projects/web" ("" for none), and that folder's own name.
+  folder: string
+  project: string
+  // Reachable from other machines: it listens on every address, not this Mac's alone.
+  exposed: bool
+  // "http://localhost:3000"; "" for a server a browser can't open (a database).
+  url: string
+  running: string
+  // A developer's server; else an app's, macOS's or a tool's own bridge on a port the system
+  // chose, listed under Other Ports.
+  dev: bool
+  // The executable's path, and the working directory's in full, for Show in Finder.
+  path: string
+  dir: string
+  // For a container's port (Docker, OrbStack): its id, which Stop stops, and its image; "" else.
+  container: string
+  image: string
+
+shape Ports
+  servers: Server[]
+  error: string
+
+// A folder Developer Files can move to the Trash (data/src/devclean.rs).
+shape DevItem
+  // From the home folder: "Projects/web/node_modules".
+  path: string
+  // The project's name, or the cache's.
+  name: string
+  // "Node modules", "Rust build"; "Cache" for a tool's cache.
+  kind: string
+  // A project's folder, "~/Projects/web"; what clearing a cache means.
+  place: string
+  // "Changed 3 months ago" ("" for a cache).
+  age: string
+  // "project" or "cache".
+  group: string
+  bytes: number
+  size: string
+  // Chosen at first: a rebuilt cache, or a project untouched for a month and not in use.
+  suggested: bool
+  // Why to think twice: "In use by node".
+  note: string
+
+shape DevFiles
+  items: DevItem[]
+  total: string
+  totalBytes: number
+  count: number
+  // Project folders past the list's end, counted in the total.
+  more: number
+  error: string
+
+// Space only its tool can free (data/src/devtools.rs): Go's module cache, a Docker prune,
+// unavailable simulators; run when the person confirms, or copied when Magnitor can't run it.
+shape DevCommand
+  // "go", "docker" or "simulators".
+  id: string
+  name: string
+  detail: string
+  // What it stands for: "go clean -modcache".
+  command: string
+  bytes: number
+  size: string
+  available: bool
+  // Why it can't run here ("Docker isn't running…"); "" when it can.
+  note: string
+
+shape DevCommands
+  commands: DevCommand[]
+  error: string
+
+// A folder Settings' picker chose, as its path on disk ("" when it couldn't be read).
+shape FolderPath
+  path: string
+
+shape Trashed
+  ok: bool
+  // The paths moved, as the view named them.
+  moved: string[]
+  message: string
+
 // The machine's load alone, read every few seconds while something shows or watches it.
 shape Vitals
   // Busy share of every core, 0 to 100.
@@ -163,6 +259,22 @@ shape Vitals
   memory: number
   pressure: string
   memoryUsed: string
+  error: string
+
+// A process behaving unusually (data/src/watchdog.rs): busy over its limit for a while, or a
+// footprint that keeps growing. Its id is the same for that kind and name until a cooldown
+// passes, so the watch posts each one once.
+shape UnusualProc
+  id: string
+  // "cpu" or "memory".
+  kind: string
+  pid: number
+  name: string
+  title: string
+  body: string
+
+shape Unusual
+  findings: UnusualProc[]
   error: string
 
 // Which window this session draws: "main", or "settings" for the Settings window.
@@ -220,6 +332,25 @@ fn shownName(names: AppName[], i: number, it: Item): string = match names.at(i) 
 fn shownDetail(names: AppName[], i: number, it: Item): string = match names.at(i) { case some(a) => a.id == it.folder and a.name != "" ? it.folder : it.detail, case none => it.detail }
 
 fn groupTitle(group: string): string = group == "cache" ? "Cache" : "On this Mac"
+
+// Finder's decimal units, as data/src/lib.rs's `format_bytes` writes them: 511 KB, 8.2 GB.
+fn oneDecimal(n: number): string = `${round(n * 10) / 10}`
+fn sizeText(b: number): string = b < 1000 ? `${b} ${b == 1 ? "byte" : "bytes"}` : b < 1000000 ? `${round(b / 1000)} KB` : b < 1000000000 ? `${oneDecimal(b / 1000000)} MB` : b < 1000000000000 ? `${oneDecimal(b / 1000000000)} GB` : `${oneDecimal(b / 1000000000000)} TB`
+fn itemsText(n: number): string = `${n} ${n == 1 ? "item" : "items"}`
+// Whether a developer file is chosen: its suggestion, unless the person flipped it.
+fn chosenNow(i: DevItem, flipped: string[]): bool = i.suggested != flipped.includes(i.path)
+fn devLabel(i: DevItem): string = i.group == "project" ? `${i.name}, ${i.kind}, ${i.size}` : `${i.name}, ${i.size}`
+fn devPlace(i: DevItem): string = i.group == "project" ? `${i.kind} · ${i.place}` : i.place
+fn purgeText(n: number, bytes: number): string = `Delete ${n == 1 ? "the item" : `the ${itemsText(n)}`} Magnitor moved to the Trash for good, freeing ${sizeText(bytes)}? They can’t be put back. Nothing else in the Trash is touched.`
+fn cmdText(c: DevCommand): string = `Run ${c.command}? ${c.detail}`
+fn cleanText(n: number, bytes: number): string = `Move ${itemsText(n)} (${sizeText(bytes)}) to the Trash? Each is rebuilt or downloaded again when a project needs it. Delete them from the Trash to free the space.`
+
+// A server's second line: its project, its executable when the name isn't it, how long it has run.
+fn portDetail(s: Server): string = [s.project, s.image != "" ? s.image : (s.process != s.name ? s.process : ""), s.running].filter(x => x != "").join(" · ")
+// A server's place in the list, for the keyboard's highlight.
+fn portKey(s: Server): string = `${s.pid}:${s.port}`
+fn portLabel(s: Server): string = `Port ${s.port}, ${s.name}${s.project != "" ? `, ${s.project}` : ""}${s.exposed ? ", open to your network" : ""}`
+fn portEndText(how: string, s: Server): string = s.container != "" ? (how == "force" ? `Kill the container ${s.name}? It ends at once, without the chance to finish.` : `Stop the container ${s.name}? Docker gives it ten seconds to finish.`) : how == "force" ? `Force stop ${s.name} on port ${s.port}? It ends at once, and anything unsaved in it is lost.` : `Stop ${s.name} on port ${s.port}?`
 
 fn sortLabel(key: string): string = key == "cpu" ? "CPU" : key == "memory" ? "Memory" : "Name"
 
@@ -295,6 +426,15 @@ style Action
   align-items = "center"
   justify-content = "center"
 
+// A small choice beside the amount Developer Files has chosen.
+style Chip
+  padding-top = 4
+  padding-bottom = 4
+  padding-left = 12
+  padding-right = 12
+  border-radius = 999
+  background-color = "light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))"
+
 style Label
   color = "-exact-secondary-label"
   font-weight = 500
@@ -304,7 +444,7 @@ style LabelOn
   font-weight = 600
 
 component Magnitor
-  // The tab the popover shows: "tasks" (Activity Monitor, the first) or "storage".
+  // The tab the popover shows: "tasks" (Activity, the first), "storage" or "ports".
   state tab = "tasks"
   // Whether the popover is open: Activity Monitor reads the machine only while it is seen.
   state shown = false
@@ -322,6 +462,72 @@ component Magnitor
   // Asked with no folders at launch, which loads Spotlight's list ahead of App caches.
   resource names = appNamesFor(cacheFolders) when isMain as shape AppName[] else empty()
   mutation revealed as shape Revealed
+  // Developer Files: found and measured with the folders, once Storage has been opened, and
+  // afresh with each measure. A person's choice is kept as the paths they flipped from the
+  // suggestion, so a new list needs nothing set up; what went to the Trash leaves the list at
+  // once (`gone`), before the measure that follows confirms it.
+  state cleaning = false
+  state flipped: string[] = []
+  state gone: string[] = []
+  state cleanConfirm = false
+  state cleanNotice = ""
+  // Settings' folders to walk beyond home, and to leave out: absolute paths.
+  state scanFolders: string[] = [] persist
+  state scanSkip: string[] = [] persist
+  mutation pickedAdd as shape FolderPath then afterPickAdd
+  mutation pickedSkip as shape FolderPath then afterPickSkip
+  resource dev = devFiles(generation, scanFolders, scanSkip) when isMain and (storageSeen or reminderScan) as shape DevFiles else empty()
+  mutation trashed as shape Trashed then afterTrash
+  // What Developer Files moved to the Trash this session, which Delete Now deletes for good.
+  state trashedPaths: string[] = []
+  state trashedBytes = 0
+  state purgeConfirm = false
+  mutation purged as shape Trashed then afterPurge
+  // Space only a tool can free (Go's module cache, a Docker prune, old simulators), asked while
+  // Developer Files is open; the one whose command waits to be confirmed.
+  state toolsGeneration = 0
+  state cmdAsk = ""
+  resource devCmds = devCommands(toolsGeneration) when isMain and cleaning as shape DevCommands else empty()
+  mutation cmdRan as shape Ended then afterCmd
+  derive cmdAsked = devCmds.commands.filter(c => c.id == cmdAsk)
+  // The monthly reminder: GB of suggested developer files that earn one (0 for never), when the
+  // walk last looked (epoch ms; 0 until alerts first run), and a walk under way for it.
+  state cleanRemind = 10 persist
+  state remindCheckedAt = 0 persist
+  state reminderScan = false
+  derive suggestedBytes = sum(devItems.filter(i => i.suggested).map(i => i.bytes))
+  derive devItems = dev.items.filter(i => not gone.includes(i.path))
+  derive devProjects = devItems.filter(i => i.group == "project")
+  derive devCaches = devItems.filter(i => i.group == "cache")
+  derive chosen = devItems.filter(i => chosenNow(i, flipped))
+  derive chosenBytes = sum(chosen.map(i => i.bytes))
+  derive finding = not current(dev)
+  // What was found, less what went to the Trash since.
+  derive devTotalText = sizeText(dev.totalBytes - sum(dev.items.filter(i => gone.includes(i.path)).map(i => i.bytes)))
+  derive devCount = devItems.length + dev.more
+  derive devCardText = dev.error != "" ? dev.error : finding and devItems.length == 0 ? "Looking for build folders and caches…" : devCount == 0 ? "No build folders or caches take space." : `${devTotalText} in ${itemsText(devCount)} you can clean up`
+  // Ports: read each tick while the tab shows, as Activity is. The server whose details show
+  // (by pid and port; -1 for the list), and the one a right-click opened the menu for.
+  state portPid = -1
+  state portNumber = -1
+  state portEnding = ""
+  state portNotice = ""
+  state othersShown = false
+  state aimedServerPid = -1
+  state aimedServerPort = -1
+  resource ports = ports(tick) when isMain and tab == "ports" as shape Ports else empty() transient
+  mutation portStopped as shape Ended then afterPortStop
+  derive devServers = ports.servers.filter(s => s.dev)
+  derive otherServers = ports.servers.filter(s => not s.dev)
+  // Zero or one: the server whose details show, and the one the menu is for.
+  derive openedServer = ports.servers.filter(s => s.pid == portPid and s.port == portNumber)
+  derive aimedServer = ports.servers.filter(s => s.pid == aimedServerPid and s.port == aimedServerPort)
+  derive portsReading = not current(ports) and ports.servers.length == 0 and ports.error == ""
+  // The list's keys, as Activity's: the rows shown, in order, and the highlighted one.
+  state portSelected = ""
+  derive portRows = devServers.concat(othersShown ? otherServers : [])
+  derive portAt = portRows.map(s => portKey(s)).indexOf(portSelected)
+  derive portKeys = shown and tab == "ports" and portPid == -1 and top(nav).name == "home"
   // Activity Monitor: a reading each tick, sorted and searched in Rust.
   state tick = 0
   state sort = "cpu"
@@ -350,16 +556,25 @@ component Magnitor
   state aimedGroup = false
   state aimedMine = false
   // `transient`: a reading is stale by the next tick, so it is never kept in the device's
-  // storage for a later launch (which would write it out every three seconds).
+  // storage for a later launch (which would write it out every few seconds).
   resource tasks = tasks(tick, sort, query, grouped) when isMain and tab == "tasks" as shape Tasks else empty() transient
   resource info = process(inspected, tick) when tab == "tasks" and inspected != -1 as shape ProcInfo else empty()
   // Each row's app icon, asked once per app (`key`): a tick that reorders the rows or keeps
   // an app's processes asks nothing, and an app that joins the list asks for its own alone.
   resource procIcons = appIcon(p.app) for p in tasks.processes key=p.app as shape AppIcon
   mutation ended as shape Ended then afterEnd
-  // Every three seconds: each reading lists every process and redraws the list.
-  task sampler when tab == "tasks" and shown
+  // Every `refresh` seconds (Settings, three unless chosen): each reading lists every process
+  // and redraws the list. A timer's interval is a literal, so each choice has its own; three
+  // also stands for a kept value that is no longer offered.
+  derive sampling = (tab == "tasks" or tab == "ports") and shown
+  task sampler1 when sampling and refresh == 1
+    every(1000, sample)
+  task sampler2 when sampling and refresh == 2
+    every(2000, sample)
+  task sampler3 when sampling and not [1, 2, 5].includes(refresh)
     every(3000, sample)
+  task sampler5 when sampling and refresh == 5
+    every(5000, sample)
 
   resource page = exactPage() as shape Page
   // The date now is the clock's epoch at zero plus performanceNow().
@@ -382,8 +597,18 @@ component Magnitor
   state diskLimit = 10 persist
   // How long, in seconds, CPU or memory stays over its limit before an alert.
   state sustain = 60 persist
+  // One process's limits, 0 for never: % CPU (of one core, as Activity Monitor counts it), held
+  // for `procBusyFor` seconds; and GB its memory grows by in ten minutes.
+  state procCpuLimit = 100 persist
+  state procBusyFor = 300 persist
+  state procGrowLimit = 1 persist
   // Whether the main window checks GitHub for a new version, at launch and every six hours.
   state autoUpdate = true persist
+  // How often, in seconds, Activity Monitor reads the machine while it is open: 1, 2, 3 or 5,
+  // Activity Monitor's own choices and Magnitor's three. Each reading costs a little CPU, so a
+  // longer one spends less. Not longer than five: `tasks.rs` takes a reading over ten seconds
+  // old as no base for a rate, and would wait a second for a fresh one each time.
+  state refresh = 3 persist
 
   // Updates: asked afresh each launch (the clock's epoch differs) and at each pulse. The
   // Settings window asks when it opens, and on Check Now.
@@ -419,7 +644,16 @@ component Magnitor
   state diskAlerted = false
   state widgetAt = 0
   state widgetShown = ""
+  // The process alerts' reading, every ten seconds while they are on: it reads each of this
+  // user's processes, more than `vitals` does, so it runs no oftener. The ids already posted,
+  // the newest last.
+  state procPulse = 0
+  state procAt = 0
+  state procAlerted: string[] = []
+  derive procWatch = alertsOn and (procCpuLimit > 0 or procGrowLimit > 0)
   derive watching = isMain and (trayShow != "icon" or alertsOn or widgetOn)
+  resource unusual = unusual(procPulse, procAt, procCpuLimit, procBusyFor, procGrowLimit) when watching and procWatch as shape Unusual else empty() transient
+  derive procNext = unusual.findings.filter(f => not procAlerted.includes(f.id))
   // Every two seconds while the menu bar shows the load; five otherwise (Activity Monitor reads
   // its own load each tick, so an open popover needs no quicker watch).
   derive quick = trayShow != "icon"
@@ -436,7 +670,7 @@ component Magnitor
   derive inWindow = page.name == "settings"
   // The menu bar item's title and tooltip; with the load shown it is all AppKit draws.
   derive trayLabel = trayShow == "icon" ? "Magnitor" : trayTitle(trayShow, vitals)
-  derive alertsNote = not alertsOn ? "Magnitor checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Magnitor are off. Turn them on in System Settings › Notifications › Magnitor." : `Magnitor tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.`
+  derive alertsNote = not alertsOn ? "Magnitor checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Magnitor are off. Turn them on in System Settings › Notifications › Magnitor." : `Magnitor tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.${procWatch ? " It also tells you when one of your apps or processes stays busy, or its memory keeps growing for ten minutes." : ""}${cleanRemind > 0 ? ` Once a month, it reminds you when developer files you can clean up pass ${cleanRemind} GB.` : ""}`
   derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Magnitor from any app." : `Press ${chordText(hotkey)} in any app to open Magnitor.`
   derive groups = ["cache", "device"].filter(g => usage.slices.filter(s => s.group == g).length > 0)
   derive measuring = not current(usage)
@@ -458,6 +692,10 @@ component Magnitor
   // The list's keys work while it is what the popover shows.
   derive listKeys = shown and tab == "tasks" and inspected == -1 and inspectedApp == "" and top(nav).name == "home"
 
+  state openStats = false
+  task statsOpener when openStats
+    after(500, showStats)
+
   // The popover first: AppKit's popover is a window of its own, and while it stays open the
   // app's last window has not closed, so the quit would wait for a click that dismisses it.
   action quit
@@ -470,10 +708,27 @@ component Magnitor
   // The shortcut, from any app: the popover, as a click on the menu bar item opens it.
   action hotkeyPressed(id: string, e: GlobalShortcutEvent)
     togglePopover("stats", source="status-item")
-  // An alert's click opens the popover at what it is about.
+  // An alert's click opens the popover at what it is about (a process's, at that process), once
+  // the status item is in the menu bar (`statsOpener`).
   action notified(tag: string, e: NotificationEvent)
-    storageSeen = storageSeen or tag == "disk"
-    tab = tag == "disk" ? "storage" : "tasks"
+    storageSeen = storageSeen or tag == "disk" or tag == "dev"
+    tab = (tag == "disk" or tag == "dev") ? "storage" : "tasks"
+    if tag == "dev"
+      cleaning = true
+    if tag.startsWith("process-")
+      match e.data
+        case some(pid)
+          inspected = number(pid)
+          inspectedApp = ""
+          ending = ""
+          endNotice = ""
+        case none
+          inspected = inspected
+    openStats = true
+  // The popover a click asked for, a moment later: at a launch from the click the menu bar has
+  // not placed the status item yet, and a popover shown from it then is painted in the page.
+  action showStats
+    openStats = false
     showPopover("stats", source="status-item")
   action record
     recording = true
@@ -519,6 +774,14 @@ component Magnitor
     diskLimit = number(v)
   action setSustain(v: string)
     sustain = number(v)
+  action setProcCpuLimit(v: string)
+    procCpuLimit = number(v)
+  action setProcBusyFor(v: string)
+    procBusyFor = number(v)
+  action setProcGrowLimit(v: string)
+    procGrowLimit = number(v)
+  action setRefresh(v: string)
+    refresh = number(v)
   action setAutoUpdate(on: bool)
     autoUpdate = on
   action recheckUpdate
@@ -573,6 +836,32 @@ component Magnitor
           showNotification(title="Your disk is almost full", body=`Only ${disk.free} is free. Open Magnitor to see what’s using the space.`, tag="disk")
       else if disk.freeBytes > diskLimit * 1200000000 or not alertsOn
         diskAlerted = false
+    // A process behaving unusually: one post a pulse, each id once.
+    if procWatch
+      match procNext.at(0)
+        case some(f)
+          procAlerted = procAlerted.slice(max(0, procAlerted.length - 49)).concat([f.id])
+          showNotification(title=f.title, body=f.body, tag=`process-${f.kind}`, data=`${f.pid}`)
+        case none
+          procAlerted = procAlerted
+      if now - procAt >= 10000
+        procPulse = procPulse + 1
+        procAt = now
+    // Once a month, Developer Files is found afresh, and a reminder posted when what it suggests
+    // passes the chosen size. The first month counts from when the reminder is first on.
+    if alertsOn and cleanRemind > 0 and clock.epochAtZero > 0
+      let epoch = clock.epochAtZero + now
+      if remindCheckedAt == 0
+        remindCheckedAt = epoch
+      else if reminderScan
+        if current(dev)
+          reminderScan = false
+          remindCheckedAt = epoch
+          if dev.error == "" and suggestedBytes >= cleanRemind * 1000000000
+            showNotification(title=`${sizeText(suggestedBytes)} of developer files to clean up`, body="Old build folders and caches you can rebuild are taking space. Open Developer Files to choose what goes to the Trash.", tag="dev")
+      else if epoch - remindCheckedAt >= 2592000000
+        reminderScan = true
+        generation = generation + 1
     if widgetOn and vitals.pressure != "" and (widgetAt == 0 or now - widgetAt >= 60000 or widgetShown != widgetShows)
       send widgetSaved = saveWidget(widgetShows, round(vitals.cpu), round(vitals.memory), vitals.pressure, disk.free, disk.size > 0 ? disk.freeBytes / disk.size : 0, clock.epochAtZero + now)
       widgetAt = now
@@ -669,6 +958,39 @@ component Magnitor
           case none
             selected = -1
         preventDefault()
+    else if portKeys and not e.isComposing and portRows.length > 0
+      let plain = not (e.metaKey or e.ctrlKey or e.altKey)
+      let last = portRows.length - 1
+      if plain and (k == "ArrowDown" or k == "ArrowUp")
+        let at = k == "ArrowDown" ? (portAt == -1 ? 0 : (portAt < last ? portAt + 1 : last)) : (portAt <= 0 ? 0 : portAt - 1)
+        match portRows.at(at)
+          case some(s)
+            portSelected = portKey(s)
+            scrollIntoView(`port-row-${s.pid}-${s.port}`, block="nearest")
+          case none
+            portSelected = ""
+        preventDefault()
+      else if plain and k == "Enter" and portAt != -1
+        match portRows.at(portAt)
+          case some(s)
+            portPid = s.pid
+            portNumber = s.port
+            portEnding = ""
+            portNotice = ""
+          case none
+            portSelected = ""
+        preventDefault()
+      else if (e.metaKey or e.ctrlKey) and e.code == "KeyK"
+        match portRows.at(portAt == -1 ? 0 : portAt)
+          case some(s)
+            aimedServerPid = s.pid
+            aimedServerPort = s.port
+            portSelected = portKey(s)
+            showPopover("port-menu", source=`port-row-${s.pid}-${s.port}`)
+            focus("port-menu-first")
+          case none
+            portSelected = ""
+        preventDefault()
   action closeApp
     inspectedApp = ""
     appEnding = ""
@@ -716,12 +1038,183 @@ component Magnitor
         endNotice = ""
   action rescan
     generation = generation + 1
+    toolsGeneration = toolsGeneration + 1
+    gone = []
+    flipped = []
+    cleanNotice = ""
   action openFolder(id: string)
     opened = id
   action back
     opened = ""
   action showInFinder(path: string)
     send revealed = reveal(path)
+  // Developer Files.
+  action openCleanup
+    cleaning = true
+    cleanConfirm = false
+    cleanNotice = ""
+  action closeCleanup
+    cleaning = false
+    cleanConfirm = false
+    purgeConfirm = false
+    cmdAsk = ""
+  // A checkbox: chosen or not, kept as a flip from the item's suggestion.
+  action choose(path: string, suggested: bool, on: bool)
+    flipped = on != suggested ? (flipped.includes(path) ? flipped : flipped.concat([path])) : flipped.filter(p => p != path)
+    cleanConfirm = false
+    cleanNotice = ""
+  action chooseSuggested
+    flipped = []
+    cleanConfirm = false
+  action chooseAll
+    flipped = devItems.filter(i => not i.suggested).map(i => i.path)
+    cleanConfirm = false
+  action chooseNone
+    flipped = devItems.filter(i => i.suggested).map(i => i.path)
+    cleanConfirm = false
+  action askClean
+    cleanConfirm = true
+    purgeConfirm = false
+    cmdAsk = ""
+    cleanNotice = ""
+  action cancelClean
+    cleanConfirm = false
+  action confirmClean
+    send trashed = trashItems(chosen.map(i => i.path), chosenBytes, scanFolders)
+    cleanConfirm = false
+  // What moved leaves the list, and the folders are measured again: the pie's Xcode build
+  // data shrinks with it.
+  action afterTrash
+    match trashed
+      case some(r)
+        cleanNotice = r.message
+        if r.moved.length > 0
+          trashedPaths = trashedPaths.concat(r.moved)
+          trashedBytes = trashedBytes + sum(dev.items.filter(i => r.moved.includes(i.path)).map(i => i.bytes))
+          gone = gone.concat(r.moved)
+          flipped = []
+          generation = generation + 1
+      case none
+        cleanNotice = ""
+  // Delete Now: what Magnitor moved to the Trash, deleted for good, asked first.
+  action askPurge
+    purgeConfirm = true
+    cleanConfirm = false
+    cmdAsk = ""
+    cleanNotice = ""
+  action cancelPurge
+    purgeConfirm = false
+  action confirmPurge
+    send purged = purgeTrashed(trashedPaths, trashedBytes)
+    purgeConfirm = false
+  action afterPurge
+    match purged
+      case some(r)
+        cleanNotice = r.message
+        if r.moved.length > 0
+          trashedBytes = r.moved.length >= trashedPaths.length ? 0 : round(trashedBytes * (trashedPaths.length - r.moved.length) / trashedPaths.length)
+          trashedPaths = trashedPaths.filter(p => not r.moved.includes(p))
+          diskPulse = diskPulse + 1
+      case none
+        cleanNotice = ""
+  // A tool's command: asked first, then run in Rust; or copied, when Magnitor can't run it.
+  action askCmd(id: string)
+    cmdAsk = id
+    cleanConfirm = false
+    purgeConfirm = false
+    cleanNotice = ""
+  action cancelCmd
+    cmdAsk = ""
+  action confirmCmd
+    send cmdRan = runDevCommand(cmdAsk)
+    cmdAsk = ""
+  action afterCmd
+    match cmdRan
+      case some(r)
+        cleanNotice = r.message
+        if r.ok
+          toolsGeneration = toolsGeneration + 1
+          diskPulse = diskPulse + 1
+      case none
+        cleanNotice = ""
+  action copyCmd(command: string)
+    copyText(command)
+    cleanNotice = "Copied the command. Paste it in Terminal to run it."
+  // Settings' folders for Developer Files, chosen with the system's folder picker.
+  action addScanFolder
+    showDirectoryPicker("scan-add")
+  action addScanSkip
+    showDirectoryPicker("scan-skip")
+  action pickedScanFolder(value: string)
+    send pickedAdd = folderPath(value)
+  action pickedScanSkip(value: string)
+    send pickedSkip = folderPath(value)
+  action afterPickAdd
+    match pickedAdd
+      case some(r)
+        if r.path != "" and not scanFolders.includes(r.path)
+          scanFolders = scanFolders.concat([r.path])
+      case none
+        scanFolders = scanFolders
+  action afterPickSkip
+    match pickedSkip
+      case some(r)
+        if r.path != "" and not scanSkip.includes(r.path)
+          scanSkip = scanSkip.concat([r.path])
+      case none
+        scanSkip = scanSkip
+  action removeScanFolder(f: string)
+    scanFolders = scanFolders.filter(x => x != f)
+  action removeScanSkip(f: string)
+    scanSkip = scanSkip.filter(x => x != f)
+  action setCleanRemind(v: string)
+    cleanRemind = number(v)
+  // Ports.
+  action openPort(pid: number, port: number)
+    portPid = pid
+    portNumber = port
+    portSelected = `${pid}:${port}`
+    portEnding = ""
+    portNotice = ""
+  action closePort
+    portPid = -1
+    portNumber = -1
+    portEnding = ""
+  action aimPort(pid: number, port: number)
+    aimedServerPid = pid
+    aimedServerPort = port
+  action toggleOthers
+    othersShown = not othersShown
+  action openLink(url: string)
+    send revealed = openUrl(url)
+  // A row's Stop: at once, as Raycast's Kill Process is; the details ask first.
+  action stopServer(pid: number, port: number, force: bool)
+    send portStopped = stopPort(pid, port, force)
+    portNotice = ""
+  action askPortEnd(how: string)
+    portEnding = how
+    portNotice = ""
+  action cancelPortEnd
+    portEnding = ""
+  action confirmPortEnd
+    send portStopped = stopPort(portPid, portNumber, portEnding == "force")
+    portEnding = ""
+  action copyUrl(url: string)
+    copyText(url)
+    portNotice = "Copied the URL."
+  action copyCommand(command: string)
+    copyText(command)
+    portNotice = "Copied the command."
+  action afterPortStop
+    match portStopped
+      case some(r)
+        portNotice = r.message
+        if r.ok
+          portPid = -1
+          portNumber = -1
+          tick = tick + 1
+      case none
+        portNotice = ""
 
   view
     main testId="root" navigationKey=`${top(nav).id}` navigate=follow globalshortcut=hotkeyPressed notificationclick=notified key=listKey width="100%" height="100%"
@@ -740,9 +1233,11 @@ component Magnitor
               row flex=1 justify-content="center"
                 row role="tablist" appearance="none" aria-label="View" class=GlassTrack testId="tabs"
                   button role="tab" aria-controls="panel-tasks" aria-selected=(tab == "tasks") press=pick("tasks") class=(tab == "tasks" ? SegmentOn : Segment) testId="tab-tasks"
-                    text "Activity Monitor" class=(tab == "tasks" ? LabelOn : Label)
+                    text "Activity" class=(tab == "tasks" ? LabelOn : Label)
                   button role="tab" aria-controls="panel-storage" aria-selected=(tab == "storage") press=pick("storage") class=(tab == "storage" ? SegmentOn : Segment) testId="tab-storage"
                     text "Storage" class=(tab == "storage" ? LabelOn : Label)
+                  button role="tab" aria-controls="panel-ports" aria-selected=(tab == "ports") press=pick("ports") class=(tab == "ports" ? SegmentOn : Segment) testId="tab-ports"
+                    text "Ports" class=(tab == "ports" ? LabelOn : Label)
               column width=32 align-items="flex-end"
                 if tab == "storage" and opened == ""
                   if measuring and usage.total != ""
@@ -751,7 +1246,103 @@ component Magnitor
                     button press=rescan disabled=measuring aria-label="Measure Again" padding=6 border-radius=6 color="-exact-secondary-label" testId="rescan"
                       image "symbol:refresh"
             column role="region" id="panel-storage" aria-label="Storage" flex=1 min-height=0 display=(tab == "storage" ? "flex" : "none") flex-direction="column"
-              if opened == ""
+              if cleaning
+                // Developer Files: each project folder and cache with a checkbox, the suggested
+                // ones checked, and the amount chosen as the screen's one number.
+                row align-items="center" gap=6 padding-top=10 padding-left=8 padding-right=16 padding-bottom=6
+                  button press=closeCleanup aria-label="Back" padding=6 border-radius=6 testId="clean-back"
+                    image "symbol:back"
+                  text "Developer Files" role="heading" aria-level=1 font="-exact-headline" flex=1 testId="clean-title"
+                  if finding
+                    progress aria-label="Finding developer files" testId="clean-finding"
+                  else
+                    text devTotalText color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="clean-total"
+                scroll id="cleanup" flex=1 min-height=0 scrollbar-width="none"
+                  column gap=12 padding-left=12 padding-right=12 padding-bottom=12
+                    if dev.error != ""
+                      text dev.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="clean-error"
+                    else if finding and devItems.length == 0
+                      column align-items="center" gap=12 padding-top=80 padding-bottom=80
+                        progress aria-label="Finding developer files"
+                        text "Looking for build folders and caches…" color="-exact-secondary-label" testId="clean-reading"
+                    else if devItems.length == 0
+                      column align-items="center" gap=8 padding-top=60 padding-left=24 padding-right=24
+                        image "symbol:select" font="-exact-large-title" color="-exact-system-green" aria-hidden=true
+                        text "Nothing to clean up" font="-exact-headline" testId="clean-empty"
+                        text "Your projects’ node_modules, build folders and your tools’ caches appear here when they take space." font="-exact-footnote" color="-exact-secondary-label" text-align="center"
+                    else
+                      column align-items="center" gap=2 padding-top=4
+                        text sizeText(chosenBytes) font="-exact-title1" font-weight=700 font-variant-numeric="tabular-nums" testId="clean-chosen"
+                        text `chosen · ${itemsText(chosen.length)}` font="-exact-footnote" color="-exact-secondary-label" testId="clean-count"
+                        row gap=4 padding-top=6 role="group" aria-label="Choose"
+                          button press=chooseSuggested class=Chip testId="clean-suggested"
+                            text "Suggested" font="-exact-footnote" font-weight=500
+                          button press=chooseAll class=Chip testId="clean-all"
+                            text "All" font="-exact-footnote" font-weight=500
+                          button press=chooseNone class=Chip testId="clean-none"
+                            text "None" font="-exact-footnote" font-weight=500
+                      if devProjects.length > 0
+                        column gap=6
+                          row align-items="baseline" padding-left=4 padding-right=4
+                            text "Projects" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
+                            text "Rebuilt when you install or build" font="-exact-caption1" color="-exact-tertiary-label"
+                          column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=10 padding-right=6
+                            for i, n in devProjects key=i.path
+                              DevRow(item=i, on=chosenNow(i, flipped), first=(n == 0), id=`dev-project-${n}`, choose=choose(i.path, i.suggested), reveal=showInFinder(i.path))
+                      if devCaches.length > 0
+                        column gap=6
+                          row align-items="baseline" padding-left=4 padding-right=4
+                            text "Caches" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
+                            text "Your tools fill them again as needed" font="-exact-caption1" color="-exact-tertiary-label"
+                          column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=10 padding-right=6
+                            for i, n in devCaches key=i.path
+                              DevRow(item=i, on=chosenNow(i, flipped), first=(n == 0), id=`dev-cache-${n}`, choose=choose(i.path, i.suggested), reveal=showInFinder(i.path))
+                      if dev.more > 0
+                        text `And ${dev.more} smaller project ${dev.more == 1 ? "folder" : "folders"}, counted in the total.` font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="clean-more"
+                    // What the Trash can't take: each freed by its own tool's command.
+                    if devCmds.commands.length > 0
+                      column gap=6
+                        row align-items="baseline" padding-left=4 padding-right=4
+                          text "Tools" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" flex=1
+                          text "Freed by the tool that owns them" font="-exact-caption1" color="-exact-tertiary-label"
+                        column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=10 padding-right=10
+                          for c, n in devCmds.commands key=c.id
+                            CommandRow(cmd=c, first=(n == 0), id=`dev-cmd-${c.id}`, run=askCmd(c.id), copy=copyCmd(c.command))
+                // The action stays in view under the list, and asks first, in the popover: an
+                // alert would close it.
+                column gap=8 padding-left=12 padding-right=12 padding-top=8 padding-bottom=4 border-top="1px solid -exact-separator"
+                  if cleanNotice != ""
+                    text cleanNotice font="-exact-footnote" color="-exact-secondary-label" testId="clean-notice"
+                  if cmdAsk != ""
+                    for c in cmdAsked key=c.id
+                      text cmdText(c) font="-exact-footnote" testId="cmd-confirm-text"
+                    row gap=8 justify-content="flex-end"
+                      button press=cancelCmd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="cmd-cancel"
+                        text "Cancel"
+                      button press=confirmCmd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="cmd-confirm"
+                        text "Run" color="white" font-weight=600
+                  else if purgeConfirm
+                    text purgeText(trashedPaths.length, trashedBytes) font="-exact-footnote" testId="purge-confirm-text"
+                    row gap=8 justify-content="flex-end"
+                      button press=cancelPurge padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="purge-cancel"
+                        text "Cancel"
+                      button press=confirmPurge padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="purge-confirm"
+                        text "Delete" color="white" font-weight=600
+                  else if cleanConfirm
+                    text cleanText(chosen.length, chosenBytes) font="-exact-footnote" testId="clean-confirm-text"
+                    row gap=8 justify-content="flex-end"
+                      button press=cancelClean padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="clean-cancel"
+                        text "Cancel"
+                      button press=confirmClean padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="clean-confirm"
+                        text "Move to Trash" color="white" font-weight=600
+                  else
+                    button press=askClean disabled=(chosen.length == 0 or pending(trashed)) padding-top=8 padding-bottom=8 border-radius=8 align-items="center" justify-content="center" background-color=(chosen.length == 0 ? "light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" : "-exact-system-blue") testId="clean-go"
+                      text (pending(trashed) ? "Moving to the Trash…" : chosen.length == 0 ? "Choose What to Clean Up" : `Move ${sizeText(chosenBytes)} to the Trash`) font-weight=600 color=(chosen.length == 0 ? "-exact-secondary-label" : "white") testId="clean-go-label"
+                    // Moved items free nothing until the Trash is emptied: these alone, at once.
+                    if trashedPaths.length > 0
+                      button press=askPurge disabled=pending(purged) padding-top=6 padding-bottom=6 border-radius=8 align-items="center" justify-content="center" background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="purge"
+                        text (pending(purged) ? "Deleting…" : `Delete ${sizeText(trashedBytes)} from the Trash Now`) font="-exact-footnote" font-weight=500 testId="purge-label"
+              else if opened == ""
                 scroll id="content" flex=1 min-height=0 scrollbar-width="none"
                   column gap=14 padding-left=12 padding-right=12 padding-bottom=8
                     if usage.error != ""
@@ -778,6 +1369,16 @@ component Magnitor
                         if diskText != ""
                           text diskText font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="disk"
                           progress value=(usage.totalBytes / disk.size) aria-label="Share of the disk" width=200
+                      // Developer Files: the build folders and caches a developer can clear.
+                      button press=openCleanup aria-label=`Developer Files: ${devCardText}` display="flex" flex-direction="row" gap=10 align-items="center" padding=10 border-radius=12 background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" testId="dev-card"
+                        column width=32 height=32 border-radius=8 background-color="-exact-system-blue" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
+                          image "symbol:sf/hammer.fill" font="-exact-subheadline" color="white"
+                        column flex=1 min-width=0 gap=1 text-align="left"
+                          text "Developer Files" font-weight=600
+                          text devCardText font="-exact-caption1" color="-exact-secondary-label" testId="dev-summary"
+                        if finding
+                          progress aria-label="Finding developer files"
+                        image "symbol:forward-chevron" color="-exact-tertiary-label" aria-hidden=true
                       for g in groups key=g
                         column gap=6
                           text groupTitle(g) font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" padding-left=4
@@ -1056,6 +1657,120 @@ component Magnitor
                           text "This is Magnitor. To quit it, use Quit Magnitor." font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
                         else if not info.mine
                           text `${info.name} belongs to ${info.user}. You can quit only your own processes.` font="-exact-footnote" color="-exact-secondary-label" testId="end-why"
+            column role="region" id="panel-ports" aria-label="Ports" flex=1 min-height=0 display=(tab == "ports" ? "flex" : "none") flex-direction="column" testId="ports"
+              if portPid == -1
+                scroll id="ports-list" flex=1 min-height=0 scrollbar-width="none"
+                  column gap=10 padding-left=12 padding-right=12 padding-bottom=8
+                    if portNotice != ""
+                      text portNotice font="-exact-footnote" color="-exact-secondary-label" testId="port-notice"
+                    if ports.error != ""
+                      text ports.error color="-exact-secondary-label" text-align="center" padding-top=40 testId="ports-error"
+                    else if portsReading
+                      column align-items="center" gap=12 padding-top=80 padding-bottom=80
+                        progress aria-label="Finding servers"
+                        text "Finding servers…" color="-exact-secondary-label" testId="ports-reading"
+                    else
+                      if devServers.length == 0
+                        column align-items="center" gap=8 padding-top=48 padding-bottom=24 padding-left=24 padding-right=24
+                          image "symbol:sf/network" font="-exact-large-title" color="-exact-tertiary-label" aria-hidden=true
+                          text "No development servers running" font="-exact-headline" text-align="center" testId="ports-empty"
+                          text "Start one, such as npm run dev, and it appears here with its port, ready to open or stop." font="-exact-footnote" color="-exact-secondary-label" text-align="center"
+                      else
+                        column gap=6
+                          text "Development" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label" padding-left=4
+                          column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=10 padding-right=6
+                            for s, i in devServers key=`${s.pid}:${s.port}`
+                              PortRow(server=s, first=(i == 0), lit=(portKey(s) == portSelected), id=`port-${i}`, open=openPort(s.pid, s.port), aim=aimPort(s.pid, s.port), browse=openLink(s.url), stop=stopServer(s.pid, s.port, false))
+                      if otherServers.length > 0
+                        column gap=6
+                          button press=toggleOthers aria-expanded=othersShown display="flex" flex-direction="row" gap=6 align-items="center" padding-left=4 padding-right=4 testId="others-toggle"
+                            text "Other Ports" font="-exact-subheadline" font-weight=600 color="-exact-secondary-label"
+                            text `${otherServers.length}` font="-exact-caption1" color="-exact-tertiary-label" font-variant-numeric="tabular-nums" testId="others-count"
+                            column flex=1
+                            image (othersShown ? "symbol:sf/chevron.down" : "symbol:forward-chevron") font="-exact-caption1" color="-exact-tertiary-label" aria-hidden=true
+                          if othersShown
+                            column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=10 padding-right=6
+                              for s, i in otherServers key=`${s.pid}:${s.port}`
+                                PortRow(server=s, first=(i == 0), lit=(portKey(s) == portSelected), id=`other-${i}`, open=openPort(s.pid, s.port), aim=aimPort(s.pid, s.port), browse=openLink(s.url), stop=stopServer(s.pid, s.port, false))
+                      text "Lists the ports your own processes opened. macOS’s own services need an administrator to see." font="-exact-caption1" color="-exact-tertiary-label" text-align="center" padding-top=4 testId="ports-note"
+                    // A row's actions, as Activity's: a right-click opens them at the pointer.
+                    column id="port-menu" popover="auto" role="menu" aria-label="Server" testId="port-menu"
+                      for s in aimedServer key=`${s.pid}:${s.port}`
+                        button id="port-menu-first" press=openPort(s.pid, s.port) popovertarget="port-menu" popovertargetaction="hide" testId="port-menu-info"
+                          text "Show Details"
+                        if s.url != ""
+                          button press=openLink(s.url) popovertarget="port-menu" popovertargetaction="hide" testId="port-menu-open"
+                            text "Open in Browser"
+                          button press=copyUrl(s.url) popovertarget="port-menu" popovertargetaction="hide" testId="port-menu-copy-url"
+                            text "Copy URL"
+                        if s.dir != ""
+                          button press=showInFinder(s.dir) popovertarget="port-menu" popovertargetaction="hide" testId="port-menu-reveal"
+                            text "Show Folder in Finder"
+                        button press=copyCommand(s.command) popovertarget="port-menu" popovertargetaction="hide" testId="port-menu-copy-command"
+                          text "Copy Command"
+                        hr
+                        button press=stopServer(s.pid, s.port, false) popovertarget="port-menu" popovertargetaction="hide" testId="port-menu-stop"
+                          text "Stop"
+                        button press=stopServer(s.pid, s.port, true) destructive=true popovertarget="port-menu" popovertargetaction="hide" testId="port-menu-force"
+                          text "Force Stop"
+              else
+                // One server: its port as the screen's number, where it listens, what runs it.
+                row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
+                  button press=closePort aria-label="Back" padding=6 border-radius=6 testId="port-back"
+                    image "symbol:back"
+                  text openedServer.map(s => s.name).join("") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="port-title"
+                scroll id="port" flex=1 min-height=0 scrollbar-width="none"
+                  column gap=10 padding-left=12 padding-right=12 padding-bottom=12
+                    if openedServer.length == 0
+                      text "This server has stopped." color="-exact-secondary-label" text-align="center" padding-top=40 testId="port-gone"
+                      if portNotice != ""
+                        text portNotice font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="port-detail-notice"
+                    for s in openedServer key=`${s.pid}:${s.port}`
+                      column align-items="center" gap=2 padding-top=4 padding-bottom=4
+                        text `${s.port}` font="-exact-large-title" font-weight=700 font-variant-numeric="tabular-nums" color="-exact-system-blue" testId="port-number"
+                        text (s.url != "" ? s.url.replaceAll("http://", "") : "Port") font="-exact-footnote" color="-exact-secondary-label" testId="port-url"
+                      if s.exposed
+                        row gap=6 align-items="flex-start" padding=10 border-radius=10 background-color="light-dark(rgba(255,149,0,0.12), rgba(255,159,10,0.18))" testId="port-exposed-note"
+                          image "symbol:sf/exclamationmark.triangle.fill" font="-exact-footnote" color="-exact-system-orange" aria-hidden=true
+                          text "Open to your network: other devices on this Wi‑Fi can reach it. Bind it to localhost to keep it on this Mac." font="-exact-footnote" flex=1
+                      column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=12 padding-right=12
+                        Field(label="Address", value=(s.exposed ? "All interfaces" : "This Mac only"), first=true, id="port-address")
+                        Field(label="Process", value=`${s.process} (${s.pid})`, first=false, id="port-process")
+                        if s.image != ""
+                          Field(label="Image", value=s.image, first=false, id="port-image")
+                        if s.running != ""
+                          Field(label="Running For", value=s.running, first=false, id="port-running")
+                        if s.folder != ""
+                          Field(label="Folder", value=s.folder, first=false, id="port-folder")
+                      text s.command font="-exact-caption1" color="-exact-secondary-label" padding-left=4 padding-right=4 testId="port-command"
+                      if s.url != ""
+                        row gap=8
+                          button press=openLink(s.url) class=Action testId="port-open"
+                            text "Open in Browser"
+                          button press=copyUrl(s.url) class=Action testId="port-copy-url"
+                            text "Copy URL"
+                      row gap=8
+                        if s.dir != ""
+                          button press=showInFinder(s.dir) class=Action testId="port-reveal"
+                            text "Show in Finder"
+                        button press=copyCommand(s.command) class=Action testId="port-copy-command"
+                          text "Copy Command"
+                      if portNotice != ""
+                        text portNotice font="-exact-footnote" color="-exact-secondary-label" testId="port-detail-notice"
+                      // Confirmed here, in the popover: an alert would close it.
+                      if portEnding != ""
+                        text portEndText(portEnding, s) font="-exact-footnote" testId="port-confirm-text"
+                        row gap=8 justify-content="flex-end"
+                          button press=cancelPortEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" testId="port-cancel"
+                            text "Cancel"
+                          button press=confirmPortEnd padding-top=7 padding-bottom=7 padding-left=12 padding-right=12 border-radius=8 background-color="-exact-system-red" testId="port-confirm"
+                            text (portEnding == "force" ? "Force Stop" : "Stop") color="white" font-weight=600
+                      else
+                        row gap=8
+                          button press=askPortEnd("stop") disabled=pending(portStopped) class=Action testId="port-stop"
+                            text "Stop"
+                          button press=askPortEnd("force") disabled=pending(portStopped) class=Action testId="port-force"
+                            text "Force Stop"
             // Settings (⌘,: the Mac's Settings window) and Quit.
             row padding-left=8 padding-right=12 padding-top=4 padding-bottom=10 align-items="center"
               link href="/settings" target="settings" aria-keyshortcuts="Meta+," aria-label="Settings" padding=4 border-radius=6 color="-exact-secondary-label" testId="open-settings"
@@ -1075,6 +1790,9 @@ component Magnitor
               if not inWindow
                 button press=closeSettings testId="settings-done"
                   text "Done"
+            // The folder pickers' answers (Developer Files' folders).
+            input id="scan-add" display="none" change=pickedScanFolder
+            input id="scan-skip" display="none" change=pickedScanSkip
             list id="settings-form" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
               section
                 header
@@ -1107,6 +1825,16 @@ component Magnitor
                           image trayIconSymbol(icon)
                 footer
                   text (trayShow == "icon" ? "The icon Magnitor shows in the menu bar." : "The menu bar shows your Mac’s load, read every two seconds.") testId="tray-note"
+              section
+                header
+                  text "Activity Monitor"
+                row
+                  text "Update Every"
+                  select value=`${refresh}` change=setRefresh aria-label="Update Activity Monitor every" testId="refresh"
+                    for n in [1, 2, 3, 5] key=n
+                      option sustainText(n) value=`${n}`
+                footer
+                  text "How often the process list reads your Mac while it’s open. Less often uses less CPU." testId="refresh-note"
               section
                 header
                   text "Desktop Widget"
@@ -1152,10 +1880,51 @@ component Magnitor
                     for n in [10, 30, 60, 300] key=n
                       option sustainText(n) value=`${n}`
                 row
+                  text "One Process Over"
+                  select value=`${procCpuLimit}` change=setProcCpuLimit disabled=(not alertsOn) aria-label="One process's CPU over" testId="proc-cpu-limit"
+                    for n in [0, 80, 100, 200, 400] key=n
+                      option limitText(n) value=`${n}`
+                row
+                  text "Busy For"
+                  select value=`${procBusyFor}` change=setProcBusyFor disabled=(not alertsOn or procCpuLimit == 0) aria-label="One process busy for" testId="proc-busy-for"
+                    for n in [60, 120, 300, 600, 1800] key=n
+                      option sustainText(n) value=`${n}`
+                row
+                  text "Memory Grows By"
+                  select value=`${procGrowLimit}` change=setProcGrowLimit disabled=(not alertsOn) aria-label="One process's memory grows by, in ten minutes" testId="proc-grow-limit"
+                    for n in [0, 1, 2, 4] key=n
+                      option diskLimitText(n) value=`${n}`
+                row
+                  text "Developer Files Over"
+                  select value=`${cleanRemind}` change=setCleanRemind disabled=(not alertsOn) aria-label="Remind me monthly when developer files to clean up are over" testId="clean-remind"
+                    for n in [0, 5, 10, 20, 50] key=n
+                      option diskLimitText(n) value=`${n}`
+                row
                   button press=testAlert disabled=(not alertsOn or notifying.state == "denied") testId="test-alert"
                     text "Send Test Notification"
                 footer
                   text alertsNote testId="alerts-note"
+              section
+                header
+                  text "Developer Files"
+                for f, n in scanFolders key=f
+                  row
+                    text f flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`scan-folder-${n}`
+                    button press=removeScanFolder(f) aria-label=`Stop looking in ${f}` testId=`scan-folder-${n}-remove`
+                      image "symbol:minus-circle"
+                row
+                  button press=addScanFolder testId="scan-add-button"
+                    text "Also Look In…"
+                for f, n in scanSkip key=f
+                  row
+                    text `Not in ${f}` flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`scan-skip-${n}`
+                    button press=removeScanSkip(f) aria-label=`Look in ${f} again` testId=`scan-skip-${n}-remove`
+                      image "symbol:minus-circle"
+                row
+                  button press=addScanSkip testId="scan-skip-button"
+                    text "Leave Out a Folder…"
+                footer
+                  text "Magnitor looks for build folders in your home folder. Add folders on other drives, or leave out ones it shouldn’t touch." testId="scan-note"
               section
                 header
                   text "Updates"
@@ -1184,6 +1953,91 @@ component Field
     row gap=12 align-items="baseline" padding-top=7 padding-bottom=7 border-top=(first ? "none" : "1px solid -exact-separator")
       text label color="-exact-secondary-label"
       text value flex=1 min-width=0 text-align="right" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=id
+
+// A server's row in Ports: its port as the row's number, what runs it and where, and Open in
+// Browser and Stop at its end. A right-click opens its actions (`port-menu`).
+component PortRow
+  props
+    server: Server
+    first: bool
+    // Highlighted by the list's keys (↑ ↓).
+    lit: bool
+    id: string
+    open: action
+    aim: action
+    browse: action
+    stop: action
+  view
+    row gap=4 align-items="center" padding-top=7 padding-bottom=7 border-top=(first ? "none" : "1px solid -exact-separator") testId=id
+      button id=`port-row-${server.pid}-${server.port}` press=open contextmenu=aim contextPopover="port-menu" aria-label=portLabel(server) display="flex" flex-direction="row" gap=8 align-items="center" flex=1 min-width=0 margin-left=-6 padding-left=6 border-radius=6 background-color=(lit ? "light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.1))" : "transparent") testId=`${id}-open`
+        text `${server.port}` font="-exact-headline" font-weight=700 font-variant-numeric="tabular-nums" color=(server.dev ? "-exact-system-blue" : "-exact-secondary-label") width="3.4rem" flex-shrink=0 text-align="left" testId=`${id}-port`
+        column flex=1 min-width=0 gap=1 text-align="left"
+          text server.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`${id}-name`
+          text portDetail(server) font="-exact-caption1" color="-exact-secondary-label" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`${id}-detail`
+          if server.exposed
+            row gap=3 align-items="center"
+              image "symbol:sf/wifi" font="-exact-caption2" color="-exact-system-orange" aria-hidden=true
+              text "Open to your network" font="-exact-caption2" color="-exact-system-orange" testId=`${id}-exposed`
+      if server.url != ""
+        button press=browse aria-label=`Open ${server.url} in your browser` padding=6 border-radius=6 color="-exact-secondary-label" testId=`${id}-browse`
+          image "symbol:sf/safari"
+      if server.dev
+        button press=stop aria-label=`Stop ${server.name} on port ${server.port}` padding=6 border-radius=6 color="-exact-secondary-label" testId=`${id}-stop`
+          image "symbol:sf/stop.circle"
+
+// A developer file's row: its checkbox, what it is and where, its size, and Show in Finder.
+component DevRow
+  props
+    item: DevItem
+    on: bool
+    first: bool
+    id: string
+    // `choose` takes the checkbox's new value.
+    choose: action
+    reveal: action
+  view
+    row gap=10 align-items="center" padding-top=8 padding-bottom=8 border-top=(first ? "none" : "1px solid -exact-separator") testId=id
+      input type="checkbox" checked=on change=choose aria-label=devLabel(item) testId=`${id}-check`
+      column flex=1 min-width=0 gap=1
+        row gap=8 align-items="baseline"
+          text item.name font-weight=500 flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`${id}-name`
+          text item.size font-variant-numeric="tabular-nums" testId=`${id}-size`
+        text devPlace(item) font="-exact-caption1" color="-exact-secondary-label" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`${id}-place`
+        if item.note != ""
+          row gap=4 align-items="center"
+            image "symbol:sf/exclamationmark.triangle.fill" font="-exact-caption2" color="-exact-system-orange" aria-hidden=true
+            text item.note font="-exact-caption2" color="-exact-system-orange" testId=`${id}-note`
+        else if item.age != ""
+          text item.age font="-exact-caption2" color="-exact-tertiary-label" testId=`${id}-age`
+      button press=reveal aria-label=`Show ${item.name} in Finder` padding=6 border-radius=6 color="-exact-secondary-label" testId=`${id}-reveal`
+        image "symbol:search"
+
+// A tool's command in Developer Files: what it frees and how, with Run (asked first in the
+// footer) or, when Magnitor can't run it here, Copy.
+component CommandRow
+  props
+    cmd: DevCommand
+    first: bool
+    id: string
+    run: action
+    copy: action
+  view
+    column gap=3 padding-top=8 padding-bottom=8 border-top=(first ? "none" : "1px solid -exact-separator") testId=id
+      row gap=8 align-items="baseline"
+        text cmd.name font-weight=500 flex=1 min-width=0 testId=`${id}-name`
+        if cmd.size != ""
+          text cmd.size font-variant-numeric="tabular-nums" testId=`${id}-size`
+      text cmd.detail font="-exact-caption1" color="-exact-secondary-label" testId=`${id}-detail`
+      if cmd.note != ""
+        text cmd.note font="-exact-caption2" color="-exact-system-orange" testId=`${id}-note`
+      row gap=8 align-items="center" padding-top=2
+        text cmd.command font="-exact-caption1" font-family="ui-monospace, monospace" color="-exact-secondary-label" flex=1 min-width=0 testId=`${id}-command`
+        if cmd.available
+          button press=run padding-top=4 padding-bottom=4 padding-left=10 padding-right=10 border-radius=6 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" aria-label=`Run ${cmd.command}` testId=`${id}-run`
+            text "Run…" font="-exact-footnote" font-weight=500
+        else
+          button press=copy padding-top=4 padding-bottom=4 padding-left=10 padding-right=10 border-radius=6 background-color="light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.12))" aria-label=`Copy ${cmd.command}` testId=`${id}-copy`
+            text "Copy" font="-exact-footnote" font-weight=500
 
 // The icon `procIcons` holds for row `i` ("" until it lands).
 fn iconAt(icons: AppIcon[], i: number): string = match icons.at(i) { case some(a) => a.icon, case none => "" }

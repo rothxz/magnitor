@@ -11,7 +11,14 @@
 //! and the thermal pressure is libnotify's state for `com.apple.system.thermalpressurelevel`,
 //! the public figure `ProcessInfo.thermalState` reports: a read of shared memory, no process.
 //!
+//! Starting the set-uid `ps` is most of a reading's cost (about 13 of its 20 ms), so `take` is
+//! told when to ask it (`tasks`'s `OTHERS_EVERY`); between, the other users' processes are
+//! `ps`'s last answer. The die temperature is read again every `TEMPERATURE_EVERY`.
+//!
 //! Elsewhere there is no reading: `take` says so, and the view shows the error.
+
+/// How long a die temperature reading stands before the sensors are asked again.
+pub const TEMPERATURE_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// One process as read: no rates yet, those come from two readings (`tasks`).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -77,7 +84,7 @@ pub fn system() -> Result<RawSystem, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn take() -> Result<RawSample, String> {
+pub fn take(_others: bool) -> Result<RawSample, String> {
     Err("Activity Monitor reads processes on macOS only.".into())
 }
 
@@ -480,7 +487,28 @@ mod mac {
         }
     }
 
-    pub fn take() -> Result<RawSample, String> {
+    /// `ps`'s last answer, named as `take` named it: what a reading that leaves `ps` out shows.
+    fn last_others() -> &'static std::sync::Mutex<HashMap<i32, RawProc>> {
+        static OTHERS: OnceLock<std::sync::Mutex<HashMap<i32, RawProc>>> = OnceLock::new();
+        OTHERS.get_or_init(Default::default)
+    }
+
+    /// The die sensors' average, read again only once `TEMPERATURE_EVERY` has passed: a reading
+    /// is a few IOKit round trips, about 5 ms of each tick, for a figure that moves slowly.
+    fn temperature() -> Option<f64> {
+        static LAST: std::sync::Mutex<Option<(std::time::Instant, Option<f64>)>> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        match *last {
+            Some((at, t)) if at.elapsed() < super::TEMPERATURE_EVERY => t,
+            _ => {
+                let t = crate::sensors::cpu_temperature();
+                *last = Some((std::time::Instant::now(), t));
+                t
+            }
+        }
+    }
+
+    pub fn take(others: bool) -> Result<RawSample, String> {
         let pids = all_pids();
         if pids.is_empty() {
             return Err("Couldn’t list the processes.".into());
@@ -489,16 +517,18 @@ mod mac {
         let mut paths = paths().lock().unwrap_or_else(|e| e.into_inner());
         let last = std::mem::take(&mut *paths);
         let mut procs = Vec::with_capacity(pids.len());
-        let mut others = Vec::new();
+        let mut refused = Vec::new();
         for pid in pids {
             match detailed(pid, &mut names, &last, &mut paths) {
                 Some(p) => procs.push(p),
-                None => others.push(pid),
+                None => refused.push(pid),
             }
         }
-        if !others.is_empty() {
-            let mut seen = from_ps(&others);
-            for pid in others {
+        let mut kept = last_others().lock().unwrap_or_else(|e| e.into_inner());
+        if others {
+            let mut seen = from_ps(&refused);
+            kept.clear();
+            for pid in refused {
                 if let Some(mut p) = seen.remove(&pid) {
                     p.user = user_name(p.uid, &mut names);
                     // libproc names the executable in full where ps's `comm` may be cut short.
@@ -507,11 +537,23 @@ mod mac {
                         p.name = base_name(&path).to_owned();
                         p.path = path;
                     }
+                    kept.insert(pid, p.clone());
                     procs.push(p);
                 }
             }
+        } else {
+            // `ps`'s last answer for the processes still listed; one started since waits for
+            // the next. Their paths are kept for that answer.
+            for pid in refused {
+                if let Some(p) = kept.get(&pid) {
+                    if let Some(entry) = last.get(&pid) {
+                        paths.insert(pid, entry.clone());
+                    }
+                    procs.push(p.clone());
+                }
+            }
         }
-        let system = RawSystem { cpu_temperature: crate::sensors::cpu_temperature(), ..counters() };
+        let system = RawSystem { cpu_temperature: temperature(), ..counters() };
         Ok(RawSample { procs, system })
     }
 
@@ -561,7 +603,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn reads_this_machine() {
-        let sample = take().expect("a reading");
+        let sample = take(true).expect("a reading");
         let me = std::process::id() as i32;
         let own = sample.procs.iter().find(|p| p.pid == me).expect("this process");
         assert!(own.detailed && own.memory > 0 && own.threads.unwrap_or(0) >= 1);

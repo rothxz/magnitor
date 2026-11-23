@@ -277,10 +277,12 @@ shape Unusual
   findings: UnusualProc[]
   error: string
 
-// Which window this session draws: "main", or "settings" for the Settings window; and the
-// host: "macos", "linux", "web" …
+// Which window this session draws: "main", or "settings" for the Settings window.
 shape Page
   name: string
+
+// The system the data runs on, as Rust's `std::env::consts::OS` names it: "macos", "linux" …
+shape Host
   platform: string
 
 shape Saved
@@ -582,6 +584,7 @@ component Magnitor
     every(5000, sample)
 
   resource page = exactPage() as shape Page
+  resource host = host() as shape Host
   // The date now is the clock's epoch at zero plus performanceNow().
   resource clock = exactTime() as shape Clock
   derive isMain = page.name == "main"
@@ -589,7 +592,7 @@ component Magnitor
   // the focus, so the popover there is manual, not light-dismissed. Settings, with no window
   // of its own there, is the page's screen under it: the popover stays open, so the window
   // stays, but is hidden meanwhile, and a click in Settings, outside it, leaves it open.
-  derive tray = page.platform == "linux"
+  derive tray = host.platform == "linux"
   derive settingsBelow = tray and top(nav).name == "settings"
 
   // Settings, kept across launches and shared by the windows.

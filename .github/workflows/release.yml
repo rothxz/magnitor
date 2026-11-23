@@ -1,0 +1,419 @@
+# Release of Magnitor: every push to `release` (a merged PR, usually master → release) builds
+# it for macOS and Linux and publishes a GitHub Release `v<version>`, the feed
+# modules/apple/Updater.swift reads (`releases/latest`, its `-macos.zip`):
+#
+#   Magnitor-v<version>-macos.zip              installed by the in-app updater
+#   Magnitor-v<version>-macos.dmg              for downloading by hand
+#   Magnitor-v<version>-linux-x86_64.tar.gz    the Linux host, a .desktop entry and the icon
+#
+# plus the hand downloads again under names without the version (Magnitor.dmg,
+# Magnitor-linux-x86_64.tar.gz), so the README's `releases/latest/download/<name>` links always
+# fetch the newest. Each release is marked "Latest" (set PRERELEASE below to hold a release back
+# as a pre-release instead).
+#
+# Version = the latest v* tag with its patch number raised by one (v0.1.4 → v0.1.5), so every
+# merge is a new release without a bump commit. For a minor or major bump, run the workflow by
+# hand on `release` with "publish" ticked and "version" set (e.g. 0.2.0).
+#
+# Pull requests and master build nothing: that is the point of this file. A manual run (Actions →
+# Release → Run workflow, on any branch) is a test build by default: an ad hoc signed macOS app
+# and the Linux tarball, kept as the run's artifacts (7 days), nothing published.
+#
+# macOS signing, in the `release` environment (Settings → Environments → release: deployment
+# branches = `release` only), so only this workflow on `release` can read them; repository
+# secrets of the same names work too, but any workflow on any branch can read those:
+#   MACOS_DEVELOPER_ID_P12           base64 of a "Developer ID Application" certificate + key (.p12)
+#   MACOS_DEVELOPER_ID_P12_PASSWORD  the .p12's password
+#   APPLE_ID                         the Apple ID that notarizes
+#   APPLE_TEAM_ID                    the 10-character team ID
+#   APPLE_APP_PASSWORD               an app-specific password for that Apple ID
+#   MACOS_PROVISION_PROFILE          (optional) base64 Developer ID provisioning profile for the
+#                                    desktop widget's App Group. Without it, releases leave out
+#                                    the widget.
+#
+# Linux builds against a newer Exact than macOS (EXACT_REF_LINUX below), plus the patch in
+# .ci/exact-patches-linux that adds the tray icon and global shortcut. Bump both together.
+name: Release
+
+on:
+  push:
+    branches: [release]
+    paths-ignore:
+      - '**.md'
+      - 'assets/screenshot*.png'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a GitHub Release (release branch, all platforms only)
+        type: boolean
+        default: false
+      platforms:
+        description: Platforms to build
+        type: choice
+        default: all
+        options: [all, macos, linux]
+      version:
+        description: Version to publish (e.g. 0.2.0); empty = the latest tag's patch + 1
+        type: string
+        default: ''
+
+concurrency:
+  # Releases queue one after another; a test build only replaces an earlier test build of the
+  # same branch.
+  group: ${{ github.event_name == 'push' && 'release' || format('release-test-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' && !inputs.publish }}
+
+permissions:
+  contents: read
+
+env:
+  PRERELEASE: "false"
+  # true: a release (push to `release`, or a manual run with publish); false: a test build.
+  PUBLISH: ${{ (github.event_name == 'push' || inputs.publish) && 'true' || 'false' }}
+  # The Exact commits each host builds against. Bump them when you move to a newer Exact, and
+  # refresh or drop .ci/exact-patches-linux with the Linux one.
+  EXACT_REF_MACOS: a54f4234f8452deb46aaca7975f76f26f3f42923
+  EXACT_REF_LINUX: 7c48f38f1b1829ca2643cdfd0aadabf5ada58c05
+  BUN_VERSION: 1.4.2
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check the run
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        run: |
+          if [ "$GITHUB_REF_NAME" != release ] || [ "${{ inputs.platforms }}" != all ]; then
+            echo "::error::Publish only from the release branch with all platforms (this run: ${GITHUB_REF_NAME}, ${{ inputs.platforms }})"
+            exit 1
+          fi
+
+      - id: version
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          if [ -n "$REQUESTED" ]; then
+            version="${REQUESTED#v}"
+            if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::version must look like 1.2.3 (got $REQUESTED)"
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+              echo "::error::v$version is already tagged"
+              exit 1
+            fi
+          else
+            last=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)
+            if [ -z "$last" ]; then
+              version="0.0.1"
+            else
+              IFS=. read -r major minor patch <<< "${last#v}"
+              version="${major}.${minor:-0}.$(( ${patch%%[!0-9]*} + 1 ))"
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Version: $version ($([ "$PUBLISH" = true ] && echo release || echo test build))"
+
+  macos:
+    name: macOS
+    needs: version
+    if: github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == 'macos'
+    runs-on: macos-26
+    timeout-minutes: 90
+    # Releases read the signing secrets from the `release` environment; test builds sign ad hoc
+    # and run in `release-test`, which needs no secrets.
+    environment: ${{ (github.event_name == 'push' || inputs.publish) && 'release' || 'release-test' }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Cargo downloads and Hermes
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/hermes-lean-sys
+            ~/.cache/exact
+          key: macos-cargo-${{ runner.arch }}-${{ env.EXACT_REF_MACOS }}
+          restore-keys: macos-cargo-${{ runner.arch }}-
+
+      - name: Prepare Exact and Rust
+        env:
+          EXACT_REF: ${{ env.EXACT_REF_MACOS }}
+        run: sh .ci/prepare-macos.sh
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # A test build: ad hoc signed, for trying on your own Mac (Gatekeeper asks on first open).
+      - name: Build (ad hoc)
+        if: env.PUBLISH != 'true'
+        env:
+          EXACT_IDENTITY: '-'
+          EXACT_BUILD_NUMBER: ${{ github.run_number }}
+          EXACT_VERSION: ${{ env.VERSION }}
+        run: |
+          bun exact.mjs mac --release --json > "$RUNNER_TEMP/build.json"
+          app=$(bun -e '
+            const lines = (await Bun.file(process.argv[1]).text()).trim().split("\n");
+            const result = JSON.parse(lines.at(-1));
+            const path = Object.values(result).find((v) => typeof v === "string" && v.endsWith(".app"));
+            if (!path) { console.error(JSON.stringify(result)); process.exit(1); }
+            console.log(path);
+          ' "$RUNNER_TEMP/build.json")
+          echo "Built $app"
+          mkdir -p dist-ci
+          ditto -c -k --sequesterRsrc --keepParent "$app" "dist-ci/Magnitor-${GITHUB_SHA::7}-macos-adhoc.zip"
+
+      - name: Import Developer ID and notary credentials
+        if: env.PUBLISH == 'true'
+        env:
+          MACOS_DEVELOPER_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          MACOS_PROVISION_PROFILE: ${{ secrets.MACOS_PROVISION_PROFILE }}
+        run: sh .ci/import-developer-id.sh
+
+      # The desktop widget needs a Developer ID provisioning profile for its App Group. Until
+      # MACOS_PROVISION_PROFILE is set, releases ship without the widget. Local builds keep it.
+      - name: Leave out the widget (no provisioning profile)
+        if: env.PUBLISH == 'true' && env.EXACT_MAC_PROFILE == ''
+        run: |
+          bun -e '
+            const file = "app.json";
+            const manifest = JSON.parse(await Bun.file(file).text());
+            delete manifest.widgets;
+            await Bun.write(file, JSON.stringify(manifest, null, 2) + "\n");
+          '
+          echo "::notice::Released without the desktop widget: add the MACOS_PROVISION_PROFILE secret to include it."
+
+      - name: Sign, notarize and package
+        if: env.PUBLISH == 'true'
+        env:
+          EXACT_BUILD_NUMBER: ${{ github.run_number }}
+          EXACT_VERSION: ${{ env.VERSION }}
+        run: |
+          set -o pipefail
+          out=target/dist/magnitor
+          if ! bun "$EXACT/scripts/exact.mjs" release . 2>&1 | tee "$RUNNER_TEMP/release.log"; then
+            # `exact release` notarizes the app (as a zip) and staples it, then staples the .dmg it
+            # builds around it, which was never submitted itself: stapler answers "Record not
+            # found" (error 65). With the app notarized and stapled, finish here: sign the .dmg,
+            # notarize and staple it, and zip the stapled app.
+            xcrun stapler validate "$out/Magnitor.app" || exit 1
+            test -f "$out/Magnitor.dmg" || exit 1
+            echo "::notice::Finishing the .dmg after exact release (it staples a .dmg it never notarized)."
+            codesign --force --sign "$EXACT_DEVELOPER_ID" --timestamp "$out/Magnitor.dmg"
+            xcrun notarytool submit "$out/Magnitor.dmg" --keychain-profile "$EXACT_NOTARY_PROFILE" --wait \
+              | tee "$RUNNER_TEMP/notary-dmg.log"
+            grep -q 'status: Accepted' "$RUNNER_TEMP/notary-dmg.log"
+            xcrun stapler staple "$out/Magnitor.dmg"
+            rm -f "$out/Magnitor.zip"
+            ditto -c -k --sequesterRsrc --keepParent "$out/Magnitor.app" "$out/Magnitor.zip"
+            spctl --assess --type execute --verbose=2 "$out/Magnitor.app"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "$out/Magnitor.dmg"
+          fi
+          mkdir -p dist-ci
+          cp "$out/Magnitor.dmg" "dist-ci/Magnitor-${TAG}-macos.dmg"
+          cp "$out/Magnitor.zip" "dist-ci/Magnitor-${TAG}-macos.zip"
+          ls -la dist-ci
+
+      - name: Remove signing keychain
+        if: always() && env.PUBLISH == 'true'
+        run: |
+          if [ -n "${CI_KEYCHAIN:-}" ]; then security delete-keychain "$CI_KEYCHAIN" || true; fi
+          rm -rf "$RUNNER_TEMP/signing"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos
+          path: dist-ci/*
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: Linux (x86_64)
+    needs: version
+    if: github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == 'linux'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Cargo downloads and Hermes
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/hermes-lean-sys
+            ~/.cache/exact
+          key: linux-cargo-${{ runner.arch }}-${{ env.EXACT_REF_LINUX }}-${{ hashFiles('.ci/exact-patches-linux/*.patch') }}
+          restore-keys: linux-cargo-${{ runner.arch }}-
+
+      - name: Prepare Exact and Rust
+        env:
+          EXACT_REF: ${{ env.EXACT_REF_LINUX }}
+        run: sh .ci/prepare-linux.sh
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Linux host
+        id: build
+        run: |
+          bun exact.mjs linux --json > "$RUNNER_TEMP/build.json"
+          bin=$(bun -e '
+            const lines = (await Bun.file(process.argv[1]).text()).trim().split("\n");
+            const result = JSON.parse(lines.at(-1));
+            if (!result.path) { console.error(JSON.stringify(result)); process.exit(1); }
+            console.log(result.path);
+          ' "$RUNNER_TEMP/build.json")
+          echo "Built $bin"
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+      # Headless: opens the popover from the status item and screenshots it. A host that cannot
+      # render the panel fails here, before anything is published.
+      - name: Smoke check
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke"
+          bun exact.mjs agent linux --size 360x620 \
+            "clock settle" "tap status-item" "clock +2000" "clock settle" \
+            "screenshot $RUNNER_TEMP/smoke/smoke-linux.png"
+
+      - name: Package
+        env:
+          BIN: ${{ steps.build.outputs.bin }}
+        run: |
+          name="Magnitor-${TAG}-linux-x86_64"
+          stage="$RUNNER_TEMP/$name"
+          mkdir -p "$stage" dist-ci
+          cp "$BIN" "$stage/magnitor"
+          cp assets/icon-1024.png "$stage/magnitor.png"
+          cat > "$stage/com.magnitor.app.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Magnitor
+          Comment=CPU, memory, storage and ports from the tray
+          Exec=magnitor
+          Icon=magnitor
+          Categories=System;Monitor;
+          Terminal=false
+          EOF
+          sed -i 's/^ *//' "$stage/com.magnitor.app.desktop"
+          tar -C "$RUNNER_TEMP" -czf "dist-ci/$name.tar.gz" "$name"
+          ls -la dist-ci
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-x86_64
+          path: dist-ci/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      # Kept apart from the downloads; the release job publishes only .zip, .dmg and .tar.gz.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: smoke-linux
+          path: ${{ runner.temp }}/smoke/smoke-linux.png
+          retention-days: 7
+
+  release:
+    name: GitHub Release
+    needs: [version, macos, linux]
+    # Test builds stop at the artifacts.
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ needs.version.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history and tags: the notes list the commits since the last release.
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: out
+          merge-multiple: true
+
+      # What's new: the release body.
+      - name: Release notes
+        run: |
+          prev=$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -vx "$TAG" | head -n 1)
+          # One line per commit, its "feat(scope):" prefix dropped and the first letter capitalised.
+          tidy() { sed -E 's/^- [a-z]+(\([^)]*\))?!?: /- /; s/^- (.)/- \U\1/'; }
+          {
+            echo "## What's new"
+            echo
+            if [ -n "$prev" ]; then
+              git log --no-merges --pretty='- %s' "$prev..$GITHUB_SHA" | tidy
+            else
+              git log --no-merges --pretty='- %s' -n 30 "$GITHUB_SHA" | tidy
+            fi
+            echo
+            echo "Built from ${GITHUB_SHA::7} on \`${GITHUB_REF_NAME}\`."
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      # Created as a draft with every file, then published: the updater reads only published
+      # releases, so it never finds a half-uploaded one.
+      - name: Publish ${{ env.TAG }}
+        run: |
+          # The README's download links: the same files without the version.
+          cp "out/Magnitor-${TAG}-macos.dmg" out/Magnitor.dmg
+          cp "out/Magnitor-${TAG}-linux-x86_64.tar.gz" out/Magnitor-linux-x86_64.tar.gz
+          ls -la out
+          files=(out/*.zip out/*.dmg out/*.tar.gz)
+          flags=(--latest)
+          [ "$PRERELEASE" = true ] && flags=(--latest=false --prerelease)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # A re-run keeps its version, so the release may already exist.
+            gh release upload "$TAG" "${files[@]}" --clobber
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --draft=false "${flags[@]}"
+          else
+            gh release create "$TAG" "${files[@]}" --draft \
+              --target "$GITHUB_SHA" \
+              --title "Magnitor $TAG" \
+              --notes-file "$RUNNER_TEMP/notes.md"
+            gh release edit "$TAG" --draft=false "${flags[@]}"
+          fi

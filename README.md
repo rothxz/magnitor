@@ -8,8 +8,7 @@
 
 Live CPU, memory and thermal readings, a searchable process list, and a disk-space breakdown, in a native app for the macOS menu bar and the Linux tray.
 
-[![macOS build](https://github.com/rothxz/magnitor/actions/workflows/macos.yml/badge.svg)](https://github.com/rothxz/magnitor/actions/workflows/macos.yml)
-[![Linux build](https://github.com/rothxz/magnitor/actions/workflows/linux.yml/badge.svg)](https://github.com/rothxz/magnitor/actions/workflows/linux.yml)
+[![Release](https://github.com/rothxz/magnitor/actions/workflows/release.yml/badge.svg)](https://github.com/rothxz/magnitor/actions/workflows/release.yml)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
 ![Rust](https://img.shields.io/badge/Rust-data%20engine-B7410E?logo=rust&logoColor=white)
@@ -22,7 +21,7 @@ Live CPU, memory and thermal readings, a searchable process list, and a disk-spa
 
 <sub>Signed and notarized · macOS 14 Sonoma or later</sub>
 
-<sub><b>Linux:</b> <a href="#getting-started">build from source</a>, or download the <code>linux-x86_64</code> tarball from the latest <a href="https://github.com/rothxz/magnitor/actions/workflows/linux.yml">Linux workflow run</a></sub>
+<sub><b>Linux:</b> <a href="#getting-started">build from source</a>, or download the <a href="https://github.com/rothxz/magnitor/releases/latest/download/Magnitor-linux-x86_64.tar.gz"><code>linux-x86_64</code> tarball</a> from the latest release</sub>
 
 <br />
 <br />

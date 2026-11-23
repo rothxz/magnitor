@@ -19,7 +19,50 @@ pub fn cpu_temperature() -> Option<f64> {
     mac::cpu_temperature()
 }
 
-#[cfg(not(target_os = "macos"))]
+/// On Linux, hwmon's CPU sensor: the package's (Intel's `coretemp`), the control one (AMD's
+/// `k10temp`, `zenpower`), or a system-on-chip's; `None` with none of them.
+#[cfg(target_os = "linux")]
+pub fn cpu_temperature() -> Option<f64> {
+    static SENSORS: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
+    let sensors = SENSORS.get_or_init(linux_sensors);
+    let readings: Vec<f64> = sensors
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok()?.trim().parse::<f64>().ok())
+        .map(|millis| millis / 1000.0)
+        .collect();
+    average(&readings)
+}
+
+/// The CPU's temperature inputs among hwmon's devices.
+#[cfg(target_os = "linux")]
+fn linux_sensors() -> Vec<std::path::PathBuf> {
+    let Ok(devices) = std::fs::read_dir("/sys/class/hwmon") else {
+        return Vec::new();
+    };
+    for device in devices.flatten() {
+        let dir = device.path();
+        let name = std::fs::read_to_string(dir.join("name")).unwrap_or_default();
+        let wanted: &[&str] = match name.trim() {
+            "coretemp" => &["Package id 0"],
+            "k10temp" | "zenpower" => &["Tctl", "Tdie"],
+            "cpu_thermal" | "soc_thermal" | "cpu-thermal" => &[""],
+            _ => continue,
+        };
+        for i in 1..=32 {
+            let input = dir.join(format!("temp{i}_input"));
+            if !input.exists() {
+                continue;
+            }
+            let label = std::fs::read_to_string(dir.join(format!("temp{i}_label"))).unwrap_or_default();
+            if wanted.iter().any(|w| w.is_empty() || label.trim() == *w) {
+                return vec![input];
+            }
+        }
+    }
+    Vec::new()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn cpu_temperature() -> Option<f64> {
     None
 }

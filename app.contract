@@ -277,9 +277,11 @@ shape Unusual
   findings: UnusualProc[]
   error: string
 
-// Which window this session draws: "main", or "settings" for the Settings window.
+// Which window this session draws: "main", or "settings" for the Settings window; and the
+// host: "macos", "linux", "web" …
 shape Page
   name: string
+  platform: string
 
 shape Saved
   ok: bool
@@ -580,6 +582,12 @@ component Magnitor
   // The date now is the clock's epoch at zero plus performanceNow().
   resource clock = exactTime() as shape Clock
   derive isMain = page.name == "main"
+  // Linux's tray window is the popover: it opens and closes with it, and goes when it loses
+  // the focus, so the popover there is manual, not light-dismissed. Settings, with no window
+  // of its own there, is the page's screen under it: the popover stays open, so the window
+  // stays, but is hidden meanwhile, and a click in Settings, outside it, leaves it open.
+  derive tray = page.platform == "linux"
+  derive settingsBelow = tray and top(nav).name == "settings"
 
   // Settings, kept across launches and shared by the windows.
   // The keyboard shortcut that opens the popover from any app, as `aria-keyshortcuts` names it.
@@ -869,8 +877,11 @@ component Magnitor
   action pick(t: string)
     tab = t
     storageSeen = storageSeen or t == "storage"
+  // Put away (Linux's tray window closed) while Settings shows: the next opening is the panel.
   action popover(e: ToggleEvent)
     shown = e.newState == "open"
+    if not shown and settingsBelow
+      nav = back(nav)
   action sample
     tick = tick + 1
   action search(v: string)
@@ -1226,7 +1237,7 @@ component Magnitor
             button id="status-item" -exact-menu="status" popovertarget="stats" aria-label=trayLabel testId="status-item"
               if trayShow == "icon"
                 image trayIconSymbol(trayIcon)
-          column id="stats" popover="auto" toggle=popover width=360 height=600 display="flex" flex-direction="column" testId="stats"
+          column id="stats" popover=(tray ? "manual" : "auto") toggle=popover width=360 height=600 visibility=(settingsBelow ? "hidden" : "visible") display="flex" flex-direction="column" testId="stats"
             // The segmented control: the platform's, between two boxes of one width so it stays centred.
             row align-items="center" gap=4 padding-top=12 padding-left=12 padding-right=12 padding-bottom=8
               column width=32
@@ -1512,7 +1523,7 @@ component Magnitor
                             ProcIcon(app=p.app, icon=iconAt(procIcons, i), id=`proc-icon-${i}`)
                             column flex=1 min-width=0 gap=1 text-align="left"
                               text p.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-name-${i}`
-                              text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-detail-${i}`
+                              text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`proc-detail-${i}`
                             text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right" testId=`proc-cpu-${i}`
                             text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right" testId=`proc-memory-${i}`
                         // While searching: every match added up.
@@ -1542,7 +1553,7 @@ component Magnitor
                 row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
                   button press=closeApp aria-label="Back" padding=6 border-radius=6 testId="app-back"
                     image "symbol:back"
-                  text (appReady ? appInfo.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="app-name"
+                  text (appReady ? appInfo.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 testId="app-name"
                 scroll id="app" flex=1 min-height=0 scrollbar-width="none"
                   column gap=10 padding-left=12 padding-right=12 padding-bottom=12
                     if not appReady
@@ -1606,11 +1617,13 @@ component Magnitor
                             text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right"
                             text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right"
               else
-                // One process, as Activity Monitor's inspector shows it.
+                // One process, as Activity Monitor's inspector shows it. The headings here wrap
+                // rather than clip: Linux's painter carries a heading's overflow clip onto the
+                // content painted after it, cutting off its left edge.
                 row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
                   button press=closeProcess aria-label="Back" padding=6 border-radius=6 testId="proc-back"
                     image "symbol:back"
-                  text (infoReady ? info.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="info-name"
+                  text (infoReady ? info.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 testId="info-name"
                 scroll id="process" flex=1 min-height=0 scrollbar-width="none"
                   column gap=10 padding-left=12 padding-right=12 padding-bottom=12
                     if not infoReady
@@ -1718,7 +1731,7 @@ component Magnitor
                 row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
                   button press=closePort aria-label="Back" padding=6 border-radius=6 testId="port-back"
                     image "symbol:back"
-                  text openedServer.map(s => s.name).join("") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="port-title"
+                  text openedServer.map(s => s.name).join("") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 testId="port-title"
                 scroll id="port" flex=1 min-height=0 scrollbar-width="none"
                   column gap=10 padding-left=12 padding-right=12 padding-bottom=12
                     if openedServer.length == 0

@@ -363,13 +363,16 @@ fn thermalColor(t: string): string = t == "Critical" ? "-exact-system-red" : t =
 
 // A chord as the Mac's menus write it: Control+Alt+Meta+S is ⌃⌥⌘S.
 fn keyGlyph(k: string): string = k == "Control" ? "⌃" : k == "Alt" ? "⌥" : k == "Shift" ? "⇧" : k == "Meta" ? "⌘" : k == "ArrowUp" ? "↑" : k == "ArrowDown" ? "↓" : k == "ArrowLeft" ? "←" : k == "ArrowRight" ? "→" : k == "Enter" ? "↩" : k == "Backspace" ? "⌫" : k == "Delete" ? "⌦" : k == "Tab" ? "⇥" : k == "Space" ? "Space" : k
-fn chordText(keys: string): string = keys.split("+").map(k => keyGlyph(k)).join("")
+// Linux names a chord's keys as GNOME's settings do (Ctrl+Alt+Super+S), Meta being Super there.
+fn keyName(k: string): string = k == "Control" ? "Ctrl" : k == "Meta" ? "Super" : k == "ArrowUp" ? "↑" : k == "ArrowDown" ? "↓" : k == "ArrowLeft" ? "←" : k == "ArrowRight" ? "→" : k
+fn chordText(keys: string, linux: bool): string = linux ? keys.split("+").map(k => keyName(k)).join("+") : keys.split("+").map(k => keyGlyph(k)).join("")
 // A press's key as a chord names it: the physical key for a letter or digit, so the chord is
 // the same under any keyboard layout.
 fn chordKey(e: KeyboardEvent): string = e.code.startsWith("Key") ? e.code.slice(3) : e.code.startsWith("Digit") ? e.code.slice(5) : e.key == " " ? "Space" : e.key.length == 1 ? e.key.toUpperCase() : e.key
 fn chordOf(e: KeyboardEvent): string = [e.ctrlKey ? "Control" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.metaKey ? "Meta" : "", chordKey(e)].filter(p => p != "").join("+")
-fn isModifier(k: string): bool = k == "Meta" or k == "Control" or k == "Alt" or k == "Shift" or k == "CapsLock" or k == "Fn"
-fn checkProblem(c: GlobalShortcutCheck): string = c.registered ? "" : match c.reason { case some(r) => r == "in-use" ? `Another app uses ${chordText(c.keys)}. Choose another shortcut.` : r == "reserved" ? `macOS keeps ${chordText(c.keys)} for itself. Choose another shortcut.` : `Magnitor can’t use ${chordText(c.keys)}. Choose another shortcut.`, case none => `Magnitor can’t use ${chordText(c.keys)}. Choose another shortcut.` }
+// Linux names the Super key `Super` (or `OS`, `Hyper`), and a third level's shift `AltGraph`.
+fn isModifier(k: string): bool = k == "Meta" or k == "Control" or k == "Alt" or k == "Shift" or k == "CapsLock" or k == "Fn" or k == "Super" or k == "Hyper" or k == "OS" or k == "AltGraph"
+fn checkProblem(c: GlobalShortcutCheck, linux: bool): string = c.registered ? "" : match c.reason { case some(r) => r == "in-use" ? `Another app uses ${chordText(c.keys, linux)}. Choose another shortcut.` : r == "reserved" ? `macOS keeps ${chordText(c.keys, linux)} for itself. Choose another shortcut.` : `Magnitor can’t use ${chordText(c.keys, linux)}. Choose another shortcut.`, case none => `Magnitor can’t use ${chordText(c.keys, linux)}. Choose another shortcut.` }
 
 // The menu bar item's symbol for each icon style.
 fn trayIconSymbol(icon: string): string = icon == "gauge" ? "symbol:sf/gauge.with.dots.needle.33percent" : icon == "cpu" ? "symbol:sf/cpu" : icon == "memory" ? "symbol:sf/memorychip" : icon == "disk" ? "symbol:sf/internaldrive" : icon == "chart" ? "symbol:sf/chart.pie" : "symbol:sf/waveform.path.ecg"
@@ -634,7 +637,7 @@ component Magnitor
   state recording = false
   state hotkeyNote = ""
   mutation hotkeyChecked as shape GlobalShortcutCheck
-  derive hotkeyProblem = match hotkeyChecked { case some(c) => c.keys == hotkey ? checkProblem(c) : "", case none => "" }
+  derive hotkeyProblem = match hotkeyChecked { case some(c) => c.keys == hotkey ? checkProblem(c, tray) : "", case none => "" }
   // Held by the main window alone: a press goes to the session that reads the chord.
   resource shortcut = globalShortcut(id="open", keys=hotkey) when isMain and hotkey != "" as shape GlobalShortcut else empty(id="open", keys="", registered=false)
   resource notifying = notificationStatus() as shape NotificationStatus else empty(available=false, state="unknown", badge=false)
@@ -679,7 +682,7 @@ component Magnitor
   // The menu bar item's title and tooltip; with the load shown it is all AppKit draws.
   derive trayLabel = trayShow == "icon" ? "Magnitor" : trayTitle(trayShow, vitals)
   derive alertsNote = not alertsOn ? "Magnitor checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Magnitor are off. Turn them on in System Settings › Notifications › Magnitor." : `Magnitor tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.${procWatch ? " It also tells you when one of your apps or processes stays busy, or its memory keeps growing for ten minutes." : ""}${cleanRemind > 0 ? ` Once a month, it reminds you when developer files you can clean up pass ${cleanRemind} GB.` : ""}`
-  derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Magnitor from any app." : `Press ${chordText(hotkey)} in any app to open Magnitor.`
+  derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Magnitor from any app." : `Press ${chordText(hotkey, tray)} in any app to open Magnitor.`
   derive groups = ["cache", "device"].filter(g => usage.slices.filter(s => s.group == g).length > 0)
   derive measuring = not current(usage)
   derive openedName = usage.slices.filter(s => s.id == opened).map(s => s.name).join("")
@@ -757,7 +760,7 @@ component Magnitor
           hotkeyNote = ""
           send hotkeyChecked = checkGlobalShortcut(keys=chord)
         else
-          hotkeyNote = "Use ⌘ or ⌃ with another key, such as ⌃⌥⌘S."
+          hotkeyNote = tray ? "Use Super or Ctrl with another key, such as Ctrl+Alt+Super+S." : "Use ⌘ or ⌃ with another key, such as ⌃⌥⌘S."
   action clearHotkey
     hotkey = ""
     hotkeyNote = ""
@@ -1705,7 +1708,7 @@ component Magnitor
                             column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=10 padding-right=6
                               for s, i in otherServers key=`${s.pid}:${s.port}`
                                 PortRow(server=s, first=(i == 0), lit=(portKey(s) == portSelected), id=`other-${i}`, open=openPort(s.pid, s.port), aim=aimPort(s.pid, s.port), browse=openLink(s.url), stop=stopServer(s.pid, s.port, false))
-                      text "Lists the ports your own processes opened. macOS’s own services need an administrator to see." font="-exact-caption1" color="-exact-tertiary-label" text-align="center" padding-top=4 testId="ports-note"
+                      text (tray ? "Lists the ports your own processes opened. The system’s services and Docker’s published ports are root’s, so they aren’t listed." : "Lists the ports your own processes opened. macOS’s own services need an administrator to see.") font="-exact-caption1" color="-exact-tertiary-label" text-align="center" padding-top=4 testId="ports-note"
                     // A row's actions, as Activity's: a right-click opens them at the pointer.
                     column id="port-menu" popover="auto" role="menu" aria-label="Server" testId="port-menu"
                       for s in aimedServer key=`${s.pid}:${s.port}`
@@ -1813,8 +1816,8 @@ component Magnitor
                 row
                   text "Open Magnitor"
                   row gap=6 align-items="center"
-                    button id="hotkey" tabindex=0 buttonStyle="bordered" press=record key=recordKey blur=stopRecording aria-label=(hotkey == "" ? "Record Shortcut" : `Shortcut ${chordText(hotkey)}. Record another`) testId="hotkey"
-                      text (recording ? "Type Shortcut…" : hotkey == "" ? "Record Shortcut" : chordText(hotkey))
+                    button id="hotkey" tabindex=0 buttonStyle="bordered" press=record key=recordKey blur=stopRecording aria-label=(hotkey == "" ? "Record Shortcut" : `Shortcut ${chordText(hotkey, tray)}. Record another`) testId="hotkey"
+                      text (recording ? "Type Shortcut…" : hotkey == "" ? "Record Shortcut" : chordText(hotkey, tray))
                     if hotkey != "" and not recording
                       button press=clearHotkey aria-label="Clear Shortcut" testId="hotkey-clear"
                         image "symbol:close"

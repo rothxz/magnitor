@@ -4,12 +4,14 @@
 
 # Magnitor
 
-**Your Mac's vitals, one click away in the menu bar.**
+**Your computer's vitals, one click away in the menu bar or tray.**
 
-Live CPU, memory and thermal readings, a searchable process list, and a disk-space breakdown, all in a native macOS menu bar app.
+Live CPU, memory and thermal readings, a searchable process list, and a disk-space breakdown, in a native app for the macOS menu bar and the Linux tray.
 
 [![macOS build](https://github.com/rothxz/magnitor/actions/workflows/macos.yml/badge.svg)](https://github.com/rothxz/magnitor/actions/workflows/macos.yml)
+[![Linux build](https://github.com/rothxz/magnitor/actions/workflows/linux.yml/badge.svg)](https://github.com/rothxz/magnitor/actions/workflows/linux.yml)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
 ![Rust](https://img.shields.io/badge/Rust-data%20engine-B7410E?logo=rust&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-sources-3178C6?logo=typescript&logoColor=white)
 ![Bun](https://img.shields.io/badge/Bun-tooling-FBF0DF?logo=bun&logoColor=black)
@@ -20,10 +22,21 @@ Live CPU, memory and thermal readings, a searchable process list, and a disk-spa
 
 <sub>Signed and notarized · macOS 14 Sonoma or later</sub>
 
+<sub><b>Linux:</b> <a href="#getting-started">build from source</a>, or download the <code>linux-x86_64</code> tarball from the latest <a href="https://github.com/rothxz/magnitor/actions/workflows/linux.yml">Linux workflow run</a></sub>
+
 <br />
 <br />
 
-<img src="assets/screenshot-popover.png" alt="Magnitor's Activity Monitor tab open from the menu bar, showing CPU, memory and the process list" width="520" />
+<table>
+<tr>
+<td align="center"><img src="assets/screenshot-popover.png" alt="Magnitor's Activity Monitor tab open from the macOS menu bar, showing CPU, memory and the process list" width="420" /></td>
+<td align="center"><img src="assets/screenshot-linux.png" alt="Magnitor's Activity tab open from the Ubuntu top bar, showing CPU, memory and the process list" width="420" /></td>
+</tr>
+<tr>
+<td align="center"><sub>macOS menu bar</sub></td>
+<td align="center"><sub>Linux tray (Ubuntu, GNOME)</sub></td>
+</tr>
+</table>
 
 </div>
 
@@ -33,7 +46,7 @@ Live CPU, memory and thermal readings, a searchable process list, and a disk-spa
 
 ### Activity Monitor
 - **CPU at a glance:** a live graph split into System and User load, with idle percentage.
-- **Thermal state:** CPU temperature and macOS thermal pressure (Normal, Fair, Serious, Critical).
+- **Thermal state:** CPU temperature and macOS thermal pressure (Normal, Fair, Serious, Critical). On Linux the temperature comes from the kernel's hwmon sensors (`coretemp`, `k10temp`, `zenpower`, or a system-on-chip's).
 - **Memory breakdown:** used vs. total, with Cached, Compressed and Swap, and a pressure indicator that turns to *Warning* when memory runs low.
 - **Process list:** every running process with its app icon, PID, % CPU and memory. Search it, and sort by CPU, Memory or Name.
 - **Process details:** open a process to see its parent, threads, CPU time and real memory, then **Quit** or **Force Quit** it.
@@ -55,13 +68,20 @@ Live CPU, memory and thermal readings, a searchable process list, and a disk-spa
 - **Global keyboard shortcut:** open Magnitor from anywhere.
 - **Automatic updates:** checks GitHub Releases at launch and every six hours, then installs and relaunches in one click. Each update is verified against Magnitor's own Developer ID signature before it replaces the app.
 
+### On Linux
+
+Magnitor runs on x86_64 Linux; it is tested on Ubuntu with GNOME on Wayland. It reads processes, memory and ports from `/proc` and temperatures from `/sys/class/hwmon`, and its tray icon is a StatusNotifierItem: KDE Plasma shows it as is, and GNOME needs the AppIndicator extension, which Ubuntu turns on by default. The global shortcut goes through the desktop portal. A few parts are macOS-only for now:
+
+- The desktop widget, and installing updates: Linux builds can check GitHub Releases, but updates install only on macOS, where each is verified against Magnitor's Developer ID signature.
+- The Ports tab lists only your own processes' ports: the system's services and Docker's published ports belong to root.
+
 ## Requirements
 
 | | |
 |---|---|
-| **OS** | macOS 14 Sonoma or later |
+| **OS** | macOS 14 Sonoma or later, or Linux (x86_64) |
 | **Runtime** | [Bun](https://bun.sh) |
-| **Toolchain** | Rust (pinned by `rust-toolchain.toml`) and Xcode command-line tools |
+| **Toolchain** | Rust (pinned by `rust-toolchain.toml`); on macOS, Xcode command-line tools too |
 | **SDK** | The Exact framework, checked out next to this repo at `../exact` (set `EXACT` to use another path) |
 
 Run `bun ../exact/scripts/exact.mjs setup --check` to see what a native build still needs.
@@ -75,15 +95,26 @@ bun install
 
 # Build and launch the macOS app
 bun run dev            # same as: bun exact.mjs mac --run
+
+# Build and launch the Linux app
+bun run dev:linux      # same as: bun exact.mjs linux && ./target/host-dev/magnitor-linux
 ```
 
-Magnitor runs as a menu bar accessory: look for its icon in the menu bar, not the Dock.
+Magnitor runs as a menu bar accessory: look for its icon in the menu bar (or the tray on Linux), not the Dock.
+
+Linux support needs Exact changes that aren't upstream yet. CI applies them from [`.ci/exact-patches-linux`](.ci/exact-patches-linux); for a local build, apply the same patch to your `../exact` checkout:
+
+```bash
+git -C ../exact checkout 7c48f38f1b1829ca2643cdfd0aadabf5ada58c05
+git -C ../exact apply "$PWD"/.ci/exact-patches-linux/*.patch
+```
 
 ### Other commands
 
 | Command | What it does |
 |---|---|
 | `bun exact.mjs mac` | Build the macOS app without launching it |
+| `bun exact.mjs linux` | Build the Linux app; prints the binary's path |
 | `bun exact.mjs web` | Web dev loop with reload on save |
 | `bun exact.mjs test` | Run the `*.test.contract` UI tests |
 | `bun exact.mjs verify` | Build, test, and check every screen in light and dark mode |
@@ -101,7 +132,9 @@ data/               Rust crate `magnitor-data`, running on its own worker thread
   src/walk.rs         Parallel folder walk for the Storage tab
   src/tasks.rs        Process list, details and quit/force quit
   src/vitals.rs       CPU, memory and pressure readings
-  src/sensors.rs      Thermal state and CPU temperature
+  src/sensors.rs      Thermal state and CPU temperature (hwmon on Linux)
+  src/sample.rs       Process sampling (/proc on Linux)
+  src/ports.rs        Listening ports
   src/icons.rs        App icons for processes
 app.test.contract   UI tests
 app.json            Manifest: name, bundle id, macOS window, widget
@@ -111,7 +144,7 @@ The heavy work (walking many gigabytes of folders and sampling processes) runs i
 
 ### Privacy
 
-Magnitor runs entirely on your Mac and makes no network requests. Its permissions are declared up front in [`app.ts`](app.ts): it can run only `df`, `mdfind`, `mdls` and `open`, and send notifications.
+Magnitor runs entirely on your computer and makes no network requests other than checking GitHub Releases for a new version, which you can turn off in Settings. Its permissions are declared up front in [`app.ts`](app.ts): it can run only `df`, `mdfind`, `mdls` and `open`, and send notifications.
 
 ## Contributing
 

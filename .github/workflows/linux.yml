@@ -1,0 +1,118 @@
+# Magnitor Linux CI.
+#
+# Every pull request, every push to master or `release`, and a manual run: build the Linux host
+# (x86_64), open its popover headless as a smoke check, and upload a tarball (the binary, a
+# .desktop entry and the icon) plus the smoke check's screenshot as workflow artifacts.
+#
+# Linux builds against a newer Exact than macOS (EXACT_REF below), plus the patch in
+# .ci/exact-patches-linux that adds the tray icon and global shortcut. Bump both together.
+name: Linux
+
+on:
+  push:
+    branches: [master, release]
+    paths-ignore:
+      - '**.md'
+      - 'assets/screenshot*.png'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The Exact commit the Linux host builds against. Bump it when you move to a newer Exact, and
+  # refresh or drop .ci/exact-patches-linux with it.
+  EXACT_REF: 7c48f38f1b1829ca2643cdfd0aadabf5ada58c05
+  BUN_VERSION: 1.4.2
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Cargo downloads and Hermes
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/hermes-lean-sys
+            ~/.cache/exact
+          key: linux-cargo-${{ runner.arch }}-${{ env.EXACT_REF }}-${{ hashFiles('.ci/exact-patches-linux/*.patch') }}
+          restore-keys: linux-cargo-${{ runner.arch }}-
+
+      - name: Prepare Exact and Rust
+        run: sh .ci/prepare-linux.sh
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check toolchain
+        run: bun "$EXACT/scripts/exact.mjs" setup --check --platform linux
+        continue-on-error: true
+
+      - name: Build Linux host
+        id: build
+        run: |
+          bun exact.mjs linux --json > "$RUNNER_TEMP/build.json"
+          bin=$(bun -e '
+            const lines = (await Bun.file(process.argv[1]).text()).trim().split("\n");
+            const result = JSON.parse(lines.at(-1));
+            if (!result.path) { console.error(JSON.stringify(result)); process.exit(1); }
+            console.log(result.path);
+          ' "$RUNNER_TEMP/build.json")
+          echo "Built $bin"
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+      # Headless: opens the popover from the status item and screenshots it. A host that cannot
+      # render the panel fails here.
+      - name: Smoke check
+        run: |
+          mkdir -p dist-ci
+          bun exact.mjs agent linux --size 360x620 \
+            "clock settle" "tap status-item" "clock +2000" "clock settle" \
+            "screenshot $PWD/dist-ci/smoke-linux.png"
+
+      - name: Package
+        env:
+          BIN: ${{ steps.build.outputs.bin }}
+        run: |
+          name="Magnitor-${GITHUB_SHA::7}-linux-x86_64"
+          stage="$RUNNER_TEMP/$name"
+          mkdir -p "$stage"
+          cp "$BIN" "$stage/magnitor"
+          cp assets/icon-1024.png "$stage/magnitor.png"
+          cat > "$stage/com.magnitor.app.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Magnitor
+          Comment=CPU, memory, storage and ports from the tray
+          Exec=magnitor
+          Icon=magnitor
+          Categories=System;Monitor;
+          Terminal=false
+          EOF
+          sed -i 's/^ *//' "$stage/com.magnitor.app.desktop"
+          tar -C "$RUNNER_TEMP" -czf "dist-ci/$name.tar.gz" "$name"
+          ls -la dist-ci
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Magnitor-linux-${{ github.sha }}
+          path: |
+            dist-ci/*.tar.gz
+            dist-ci/smoke-linux.png
+          retention-days: 14

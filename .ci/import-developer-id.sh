@@ -12,7 +12,7 @@ set -eu
 for name in MACOS_DEVELOPER_ID_P12 MACOS_DEVELOPER_ID_P12_PASSWORD APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD; do
   eval "value=\${$name:-}"
   if [ -z "$value" ]; then
-    echo "::error::Missing secret $name. See the 'Release signing' section of .github/workflows/macos.yml."
+    echo "::error::Missing secret $name. See the header of .github/workflows/release.yml."
     exit 1
   fi
 done

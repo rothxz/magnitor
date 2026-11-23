@@ -1,7 +1,7 @@
 # Magnitor macOS CI/CD.
 #
-# - Every pull request (and a manual run): build the app (ad hoc signed) and upload it as a
-#   workflow artifact. UI tests run locally before pushing, not here.
+# - A manual run: build the app (ad hoc signed) and upload it as a workflow artifact. Pull
+#   requests build nothing. UI tests run locally before pushing, not here.
 # - Every push to the `release` branch (e.g. merging master into it): a DRAFT release. The
 #   version is the latest published v* tag with its patch number raised by one (v0.1.3 -> v0.1.4; v0.0.1 when there is none yet). The app is
 #   built, signed with a Developer ID, notarized and stapled, and the .dmg and .zip are attached
@@ -31,7 +31,6 @@ on:
     paths-ignore:
       - '**.md'
       - 'assets/screenshot*.png'
-  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -49,7 +48,7 @@ env:
 jobs:
   build:
     name: Build
-    # A push releases instead, and the release builds the app itself.
+    # Manual runs only: a push releases instead, and the release builds the app itself.
     if: github.event_name != 'push'
     runs-on: macos-26
     timeout-minutes: 90

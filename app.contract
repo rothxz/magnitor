@@ -281,6 +281,10 @@ shape Unusual
 shape Page
   name: string
 
+// The system the data runs on, as Rust's `std::env::consts::OS` names it: "macos", "linux" …
+shape Host
+  platform: string
+
 shape Saved
   ok: bool
 
@@ -361,13 +365,16 @@ fn thermalColor(t: string): string = t == "Critical" ? "-exact-system-red" : t =
 
 // A chord as the Mac's menus write it: Control+Alt+Meta+S is ⌃⌥⌘S.
 fn keyGlyph(k: string): string = k == "Control" ? "⌃" : k == "Alt" ? "⌥" : k == "Shift" ? "⇧" : k == "Meta" ? "⌘" : k == "ArrowUp" ? "↑" : k == "ArrowDown" ? "↓" : k == "ArrowLeft" ? "←" : k == "ArrowRight" ? "→" : k == "Enter" ? "↩" : k == "Backspace" ? "⌫" : k == "Delete" ? "⌦" : k == "Tab" ? "⇥" : k == "Space" ? "Space" : k
-fn chordText(keys: string): string = keys.split("+").map(k => keyGlyph(k)).join("")
+// Linux names a chord's keys as GNOME's settings do (Ctrl+Alt+Super+S), Meta being Super there.
+fn keyName(k: string): string = k == "Control" ? "Ctrl" : k == "Meta" ? "Super" : k == "ArrowUp" ? "↑" : k == "ArrowDown" ? "↓" : k == "ArrowLeft" ? "←" : k == "ArrowRight" ? "→" : k
+fn chordText(keys: string, linux: bool): string = linux ? keys.split("+").map(k => keyName(k)).join("+") : keys.split("+").map(k => keyGlyph(k)).join("")
 // A press's key as a chord names it: the physical key for a letter or digit, so the chord is
 // the same under any keyboard layout.
 fn chordKey(e: KeyboardEvent): string = e.code.startsWith("Key") ? e.code.slice(3) : e.code.startsWith("Digit") ? e.code.slice(5) : e.key == " " ? "Space" : e.key.length == 1 ? e.key.toUpperCase() : e.key
 fn chordOf(e: KeyboardEvent): string = [e.ctrlKey ? "Control" : "", e.altKey ? "Alt" : "", e.shiftKey ? "Shift" : "", e.metaKey ? "Meta" : "", chordKey(e)].filter(p => p != "").join("+")
-fn isModifier(k: string): bool = k == "Meta" or k == "Control" or k == "Alt" or k == "Shift" or k == "CapsLock" or k == "Fn"
-fn checkProblem(c: GlobalShortcutCheck): string = c.registered ? "" : match c.reason { case some(r) => r == "in-use" ? `Another app uses ${chordText(c.keys)}. Choose another shortcut.` : r == "reserved" ? `macOS keeps ${chordText(c.keys)} for itself. Choose another shortcut.` : `Magnitor can’t use ${chordText(c.keys)}. Choose another shortcut.`, case none => `Magnitor can’t use ${chordText(c.keys)}. Choose another shortcut.` }
+// Linux names the Super key `Super` (or `OS`, `Hyper`), and a third level's shift `AltGraph`.
+fn isModifier(k: string): bool = k == "Meta" or k == "Control" or k == "Alt" or k == "Shift" or k == "CapsLock" or k == "Fn" or k == "Super" or k == "Hyper" or k == "OS" or k == "AltGraph"
+fn checkProblem(c: GlobalShortcutCheck, linux: bool): string = c.registered ? "" : match c.reason { case some(r) => r == "in-use" ? `Another app uses ${chordText(c.keys, linux)}. Choose another shortcut.` : r == "reserved" ? `macOS keeps ${chordText(c.keys, linux)} for itself. Choose another shortcut.` : `Magnitor can’t use ${chordText(c.keys, linux)}. Choose another shortcut.`, case none => `Magnitor can’t use ${chordText(c.keys, linux)}. Choose another shortcut.` }
 
 // The menu bar item's symbol for each icon style.
 fn trayIconSymbol(icon: string): string = icon == "gauge" ? "symbol:sf/gauge.with.dots.needle.33percent" : icon == "cpu" ? "symbol:sf/cpu" : icon == "memory" ? "symbol:sf/memorychip" : icon == "disk" ? "symbol:sf/internaldrive" : icon == "chart" ? "symbol:sf/chart.pie" : "symbol:sf/waveform.path.ecg"
@@ -577,9 +584,16 @@ component Magnitor
     every(5000, sample)
 
   resource page = exactPage() as shape Page
+  resource host = host() as shape Host
   // The date now is the clock's epoch at zero plus performanceNow().
   resource clock = exactTime() as shape Clock
   derive isMain = page.name == "main"
+  // Linux's tray window is the popover: it opens and closes with it, and goes when it loses
+  // the focus, so the popover there is manual, not light-dismissed. Settings, with no window
+  // of its own there, is the page's screen under it: the popover stays open, so the window
+  // stays, but is hidden meanwhile, and a click in Settings, outside it, leaves it open.
+  derive tray = host.platform == "linux"
+  derive settingsBelow = tray and top(nav).name == "settings"
 
   // Settings, kept across launches and shared by the windows.
   // The keyboard shortcut that opens the popover from any app, as `aria-keyshortcuts` names it.
@@ -626,7 +640,7 @@ component Magnitor
   state recording = false
   state hotkeyNote = ""
   mutation hotkeyChecked as shape GlobalShortcutCheck
-  derive hotkeyProblem = match hotkeyChecked { case some(c) => c.keys == hotkey ? checkProblem(c) : "", case none => "" }
+  derive hotkeyProblem = match hotkeyChecked { case some(c) => c.keys == hotkey ? checkProblem(c, tray) : "", case none => "" }
   // Held by the main window alone: a press goes to the session that reads the chord.
   resource shortcut = globalShortcut(id="open", keys=hotkey) when isMain and hotkey != "" as shape GlobalShortcut else empty(id="open", keys="", registered=false)
   resource notifying = notificationStatus() as shape NotificationStatus else empty(available=false, state="unknown", badge=false)
@@ -671,7 +685,7 @@ component Magnitor
   // The menu bar item's title and tooltip; with the load shown it is all AppKit draws.
   derive trayLabel = trayShow == "icon" ? "Magnitor" : trayTitle(trayShow, vitals)
   derive alertsNote = not alertsOn ? "Magnitor checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Magnitor are off. Turn them on in System Settings › Notifications › Magnitor." : `Magnitor tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.${procWatch ? " It also tells you when one of your apps or processes stays busy, or its memory keeps growing for ten minutes." : ""}${cleanRemind > 0 ? ` Once a month, it reminds you when developer files you can clean up pass ${cleanRemind} GB.` : ""}`
-  derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Magnitor from any app." : `Press ${chordText(hotkey)} in any app to open Magnitor.`
+  derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Magnitor from any app." : `Press ${chordText(hotkey, tray)} in any app to open Magnitor.`
   derive groups = ["cache", "device"].filter(g => usage.slices.filter(s => s.group == g).length > 0)
   derive measuring = not current(usage)
   derive openedName = usage.slices.filter(s => s.id == opened).map(s => s.name).join("")
@@ -749,7 +763,7 @@ component Magnitor
           hotkeyNote = ""
           send hotkeyChecked = checkGlobalShortcut(keys=chord)
         else
-          hotkeyNote = "Use ⌘ or ⌃ with another key, such as ⌃⌥⌘S."
+          hotkeyNote = tray ? "Use Super or Ctrl with another key, such as Ctrl+Alt+Super+S." : "Use ⌘ or ⌃ with another key, such as ⌃⌥⌘S."
   action clearHotkey
     hotkey = ""
     hotkeyNote = ""
@@ -869,8 +883,11 @@ component Magnitor
   action pick(t: string)
     tab = t
     storageSeen = storageSeen or t == "storage"
+  // Put away (Linux's tray window closed) while Settings shows: the next opening is the panel.
   action popover(e: ToggleEvent)
     shown = e.newState == "open"
+    if not shown and settingsBelow
+      nav = back(nav)
   action sample
     tick = tick + 1
   action search(v: string)
@@ -1226,7 +1243,7 @@ component Magnitor
             button id="status-item" -exact-menu="status" popovertarget="stats" aria-label=trayLabel testId="status-item"
               if trayShow == "icon"
                 image trayIconSymbol(trayIcon)
-          column id="stats" popover="auto" toggle=popover width=360 height=600 display="flex" flex-direction="column" testId="stats"
+          column id="stats" popover=(tray ? "manual" : "auto") toggle=popover width=360 height=600 visibility=(settingsBelow ? "hidden" : "visible") display="flex" flex-direction="column" testId="stats"
             // The segmented control: the platform's, between two boxes of one width so it stays centred.
             row align-items="center" gap=4 padding-top=12 padding-left=12 padding-right=12 padding-bottom=8
               column width=32
@@ -1512,7 +1529,7 @@ component Magnitor
                             ProcIcon(app=p.app, icon=iconAt(procIcons, i), id=`proc-icon-${i}`)
                             column flex=1 min-width=0 gap=1 text-align="left"
                               text p.name text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-name-${i}`
-                              text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId=`proc-detail-${i}`
+                              text p.detail font="-exact-caption1" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`proc-detail-${i}`
                             text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right" testId=`proc-cpu-${i}`
                             text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right" testId=`proc-memory-${i}`
                         // While searching: every match added up.
@@ -1542,7 +1559,7 @@ component Magnitor
                 row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
                   button press=closeApp aria-label="Back" padding=6 border-radius=6 testId="app-back"
                     image "symbol:back"
-                  text (appReady ? appInfo.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="app-name"
+                  text (appReady ? appInfo.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 testId="app-name"
                 scroll id="app" flex=1 min-height=0 scrollbar-width="none"
                   column gap=10 padding-left=12 padding-right=12 padding-bottom=12
                     if not appReady
@@ -1606,11 +1623,13 @@ component Magnitor
                             text p.cpu font-variant-numeric="tabular-nums" width="3.5rem" text-align="right"
                             text p.memory font-variant-numeric="tabular-nums" width="5rem" text-align="right"
               else
-                // One process, as Activity Monitor's inspector shows it.
+                // One process, as Activity Monitor's inspector shows it. The headings here wrap
+                // rather than clip: Linux's painter carries a heading's overflow clip onto the
+                // content painted after it, cutting off its left edge.
                 row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
                   button press=closeProcess aria-label="Back" padding=6 border-radius=6 testId="proc-back"
                     image "symbol:back"
-                  text (infoReady ? info.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="info-name"
+                  text (infoReady ? info.name : "") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 testId="info-name"
                 scroll id="process" flex=1 min-height=0 scrollbar-width="none"
                   column gap=10 padding-left=12 padding-right=12 padding-bottom=12
                     if not infoReady
@@ -1692,7 +1711,7 @@ component Magnitor
                             column background-color="light-dark(rgba(0,0,0,0.05), rgba(255,255,255,0.07))" border-radius=12 padding-left=10 padding-right=6
                               for s, i in otherServers key=`${s.pid}:${s.port}`
                                 PortRow(server=s, first=(i == 0), lit=(portKey(s) == portSelected), id=`other-${i}`, open=openPort(s.pid, s.port), aim=aimPort(s.pid, s.port), browse=openLink(s.url), stop=stopServer(s.pid, s.port, false))
-                      text "Lists the ports your own processes opened. macOS’s own services need an administrator to see." font="-exact-caption1" color="-exact-tertiary-label" text-align="center" padding-top=4 testId="ports-note"
+                      text (tray ? "Lists the ports your own processes opened. The system’s services and Docker’s published ports are root’s, so they aren’t listed." : "Lists the ports your own processes opened. macOS’s own services need an administrator to see.") font="-exact-caption1" color="-exact-tertiary-label" text-align="center" padding-top=4 testId="ports-note"
                     // A row's actions, as Activity's: a right-click opens them at the pointer.
                     column id="port-menu" popover="auto" role="menu" aria-label="Server" testId="port-menu"
                       for s in aimedServer key=`${s.pid}:${s.port}`
@@ -1718,7 +1737,7 @@ component Magnitor
                 row align-items="center" gap=6 padding-left=8 padding-right=16 padding-bottom=6
                   button press=closePort aria-label="Back" padding=6 border-radius=6 testId="port-back"
                     image "symbol:back"
-                  text openedServer.map(s => s.name).join("") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 text-overflow="ellipsis" white-space="nowrap" overflow="hidden" testId="port-title"
+                  text openedServer.map(s => s.name).join("") role="heading" aria-level=1 font="-exact-headline" flex=1 min-width=0 testId="port-title"
                 scroll id="port" flex=1 min-height=0 scrollbar-width="none"
                   column gap=10 padding-left=12 padding-right=12 padding-bottom=12
                     if openedServer.length == 0
@@ -1800,8 +1819,8 @@ component Magnitor
                 row
                   text "Open Magnitor"
                   row gap=6 align-items="center"
-                    button id="hotkey" tabindex=0 buttonStyle="bordered" press=record key=recordKey blur=stopRecording aria-label=(hotkey == "" ? "Record Shortcut" : `Shortcut ${chordText(hotkey)}. Record another`) testId="hotkey"
-                      text (recording ? "Type Shortcut…" : hotkey == "" ? "Record Shortcut" : chordText(hotkey))
+                    button id="hotkey" tabindex=0 buttonStyle="bordered" press=record key=recordKey blur=stopRecording aria-label=(hotkey == "" ? "Record Shortcut" : `Shortcut ${chordText(hotkey, tray)}. Record another`) testId="hotkey"
+                      text (recording ? "Type Shortcut…" : hotkey == "" ? "Record Shortcut" : chordText(hotkey, tray))
                     if hotkey != "" and not recording
                       button press=clearHotkey aria-label="Clear Shortcut" testId="hotkey-clear"
                         image "symbol:close"

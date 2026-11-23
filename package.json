@@ -4,7 +4,8 @@
   "scripts": {
     "build": "bun exact.mjs web-build --out dist",
     "start": "bun exact.mjs serve dist",
-    "dev": "EXACT_IDENTITY=- bun exact.mjs mac --run"
+    "dev": "EXACT_IDENTITY=- bun exact.mjs mac --run",
+    "dev:linux": "bun exact.mjs linux && ./target/host-dev/magnitor-linux"
   },
   "dependencies": {
     "@exact/child-process": "file:../exact/packages/child-process",

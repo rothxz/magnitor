@@ -1,6 +1,6 @@
 # Magnitor Linux CI.
 #
-# Every pull request, every push to master or `release`, and a manual run: build the Linux host
+# Every push to `release` (e.g. merging master into it) and a manual run: build the Linux host
 # (x86_64), open its popover headless as a smoke check, and upload a tarball (the binary, a
 # .desktop entry and the icon) plus the smoke check's screenshot as workflow artifacts.
 #
@@ -10,11 +10,10 @@ name: Linux
 
 on:
   push:
-    branches: [master, release]
+    branches: [release]
     paths-ignore:
       - '**.md'
       - 'assets/screenshot*.png'
-  pull_request:
   workflow_dispatch:
 
 concurrency:

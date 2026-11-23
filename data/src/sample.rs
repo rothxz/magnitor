@@ -15,6 +15,12 @@
 //! told when to ask it (`tasks`'s `OTHERS_EVERY`); between, the other users' processes are
 //! `ps`'s last answer. The die temperature is read again every `TEMPERATURE_EVERY`.
 //!
+//! On Linux every process is in `/proc`, readable to any user and cheap to read: its CPU time,
+//! threads and start from `stat`, its memory from `statm` (resident less shared: the private
+//! memory GNOME's System Monitor shows), its owner from the directory's. Kernel threads are left
+//! out, as Activity Monitor shows none. The system's figures are `/proc/stat`, `/proc/meminfo`
+//! and the kernel's memory pressure (`/proc/pressure/memory`); the temperature is hwmon's.
+//!
 //! Elsewhere there is no reading: `take` says so, and the view shows the error.
 
 /// How long a die temperature reading stands before the sensors are asked again.
@@ -76,26 +82,81 @@ pub struct RawSample {
 #[cfg(target_os = "macos")]
 pub use mac::{alive, end, system, take};
 
+#[cfg(target_os = "linux")]
+pub use linux::{alive, end, system, take};
+
 /// The machine's counters alone, without a process: the menu bar's readout and the alerts read
 /// these every few seconds.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn system() -> Result<RawSystem, String> {
-    Err("Magnitor reads the CPU and memory on macOS only.".into())
+    Err("Magnitor reads the CPU and memory on macOS and Linux only.".into())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn take(_others: bool) -> Result<RawSample, String> {
-    Err("Activity Monitor reads processes on macOS only.".into())
+    Err("Activity Monitor reads processes on macOS and Linux only.".into())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn end(_pid: i32, _force: bool) -> Result<(), i32> {
     Err(1)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn alive(_pid: i32) -> bool {
     false
+}
+
+/// The kernel's memory pressure in macOS's levels (1 normal, 2 warning, 4 critical) from the
+/// share of memory still available and the PSI `some avg10` (the percent of the last ten
+/// seconds some task waited on memory).
+pub fn linux_pressure(available_share: f64, waiting: Option<f64>) -> i32 {
+    let waiting = waiting.unwrap_or(0.0);
+    if available_share < 0.05 || waiting >= 30.0 {
+        4
+    } else if available_share < 0.15 || waiting >= 10.0 {
+        2
+    } else {
+        1
+    }
+}
+
+/// A thermal level in macOS's terms (0 nominal … 3 critical) from the CPU's temperature, for
+/// Linux, which reports no thermal pressure: Intel and AMD parts throttle near 95–100 °C.
+pub fn linux_thermal(celsius: f64) -> u64 {
+    match celsius {
+        t if t >= 95.0 => 3,
+        t if t >= 90.0 => 2,
+        t if t >= 80.0 => 1,
+        _ => 0,
+    }
+}
+
+/// `/proc/meminfo` as kB by field name.
+pub fn parse_meminfo(text: &str) -> std::collections::HashMap<&str, u64> {
+    text.lines()
+        .filter_map(|line| {
+            let (key, rest) = line.split_once(':')?;
+            Some((key.trim(), rest.split_whitespace().next()?.parse().ok()?))
+        })
+        .collect()
+}
+
+/// `/proc/stat`'s `cpu` line as macOS's four ticks: user, system (with interrupts and steal),
+/// idle (with I/O wait), nice.
+pub fn parse_cpu_ticks(stat: &str) -> Option<[u64; 4]> {
+    let line = stat.lines().find(|l| l.starts_with("cpu "))?;
+    let n: Vec<u64> = line.split_whitespace().skip(1).filter_map(|f| f.parse().ok()).collect();
+    let at = |i: usize| n.get(i).copied().unwrap_or(0);
+    (n.len() >= 4).then(|| [at(0), at(2) + at(5) + at(6) + at(7), at(3) + at(4), at(1)])
+}
+
+/// One `/proc/<pid>/stat` line: its `comm`, and the fields after it (state first), or `None`.
+pub fn parse_proc_stat(line: &str) -> Option<(&str, Vec<&str>)> {
+    let open = line.find('(')?;
+    let close = line.rfind(')')?;
+    let comm = line.get(open + 1..close)?;
+    Some((comm, line.get(close + 1..)?.split_whitespace().collect()))
 }
 
 /// `ps`'s `time`, `[[dd-]hh:]mm:ss.ss`, in nanoseconds.
@@ -574,9 +635,212 @@ mod mac {
     }
 }
 
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::{base_name, linux_pressure, linux_thermal, parse_cpu_ticks, parse_meminfo, parse_proc_stat, RawProc, RawSample, RawSystem};
+    use std::collections::HashMap;
+    use std::fs;
+    use std::os::unix::fs::MetadataExt;
+    use std::sync::OnceLock;
+
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+        fn getuid() -> u32;
+        fn sysconf(name: i32) -> i64;
+    }
+
+    // <unistd.h> on Linux.
+    const SC_CLK_TCK: i32 = 2;
+    const SC_PAGESIZE: i32 = 30;
+    /// `PF_KTHREAD`, in `stat`'s flags: a kernel thread.
+    const KTHREAD: u64 = 0x0020_0000;
+
+    fn clock_ticks() -> u64 {
+        static TICKS: OnceLock<u64> = OnceLock::new();
+        *TICKS.get_or_init(|| u64::try_from(unsafe { sysconf(SC_CLK_TCK) }).ok().filter(|t| *t > 0).unwrap_or(100))
+    }
+
+    fn page_size() -> u64 {
+        static PAGE: OnceLock<u64> = OnceLock::new();
+        *PAGE.get_or_init(|| u64::try_from(unsafe { sysconf(SC_PAGESIZE) }).ok().filter(|p| *p > 0).unwrap_or(4096))
+    }
+
+    /// Seconds since 1970 the machine booted at (`/proc/stat`'s `btime`).
+    fn boot_time() -> u64 {
+        static BOOT: OnceLock<u64> = OnceLock::new();
+        *BOOT.get_or_init(|| {
+            let stat = fs::read_to_string("/proc/stat").unwrap_or_default();
+            stat.lines().find_map(|l| l.strip_prefix("btime ")?.trim().parse().ok()).unwrap_or(0)
+        })
+    }
+
+    /// The accounts' names by uid, from `/etc/passwd`, read once.
+    fn user_names() -> &'static HashMap<u32, String> {
+        static NAMES: OnceLock<HashMap<u32, String>> = OnceLock::new();
+        NAMES.get_or_init(|| {
+            let passwd = fs::read_to_string("/etc/passwd").unwrap_or_default();
+            passwd
+                .lines()
+                .filter_map(|line| {
+                    let mut fields = line.split(':');
+                    let name = fields.next()?;
+                    let uid = fields.nth(1)?.parse().ok()?;
+                    Some((uid, name.to_owned()))
+                })
+                .collect()
+        })
+    }
+
+    fn user_name(uid: u32) -> String {
+        user_names().get(&uid).cloned().unwrap_or_else(|| uid.to_string())
+    }
+
+    pub fn system() -> Result<RawSystem, String> {
+        counters()
+    }
+
+    fn counters() -> Result<RawSystem, String> {
+        let stat = fs::read_to_string("/proc/stat").map_err(|e| format!("Couldn’t read the CPU: {e}"))?;
+        let ticks = parse_cpu_ticks(&stat).ok_or("Couldn’t read the CPU.")?;
+        let text = fs::read_to_string("/proc/meminfo").map_err(|e| format!("Couldn’t read the memory: {e}"))?;
+        let info = parse_meminfo(&text);
+        let kb = |key: &str| info.get(key).copied().unwrap_or(0) * 1024;
+        let total = kb("MemTotal");
+        let available = info.get("MemAvailable").map_or_else(|| kb("MemFree") + kb("Cached") + kb("Buffers"), |a| a * 1024);
+        let waiting = fs::read_to_string("/proc/pressure/memory").ok().and_then(|psi| {
+            psi.lines().find(|l| l.starts_with("some "))?.split_whitespace().find_map(|f| f.strip_prefix("avg10=")?.parse().ok())
+        });
+        let share = if total > 0 { available as f64 / total as f64 } else { 1.0 };
+        Ok(RawSystem {
+            ticks,
+            memory_total: total,
+            memory_used: total.saturating_sub(available),
+            memory_cached: kb("Cached") + kb("Buffers"),
+            memory_compressed: kb("Zswap"),
+            swap_used: kb("SwapTotal").saturating_sub(kb("SwapFree")),
+            pressure: linux_pressure(share, waiting),
+            thermal: None,
+            cpu_temperature: None,
+        })
+    }
+
+    /// The temperature, read again only once `TEMPERATURE_EVERY` has passed.
+    fn temperature() -> Option<f64> {
+        static LAST: std::sync::Mutex<Option<(std::time::Instant, Option<f64>)>> = std::sync::Mutex::new(None);
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        match *last {
+            Some((at, t)) if at.elapsed() < super::TEMPERATURE_EVERY => t,
+            _ => {
+                let t = crate::sensors::cpu_temperature();
+                *last = Some((std::time::Instant::now(), t));
+                t
+            }
+        }
+    }
+
+    /// One process, or `None` for a kernel thread or one that ended while it was read.
+    fn read(pid: i32, me: u32) -> Option<RawProc> {
+        let dir = format!("/proc/{pid}");
+        let line = fs::read_to_string(format!("{dir}/stat")).ok()?;
+        let (comm, f) = parse_proc_stat(&line)?;
+        // After `comm`: state, ppid, pgrp, session, tty, tpgid, flags, minflt, cminflt, majflt,
+        // cmajflt, utime, stime, cutime, cstime, priority, nice, num_threads, itrealvalue,
+        // starttime.
+        let num = |i: usize| f.get(i).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        if num(6) & KTHREAD != 0 || pid == 2 {
+            return None;
+        }
+        let uid = fs::metadata(&dir).ok()?.uid();
+        let statm = fs::read_to_string(format!("{dir}/statm")).unwrap_or_default();
+        let pages: Vec<u64> = statm.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        let resident = pages.get(1).copied().unwrap_or(0) * page_size();
+        let shared = pages.get(2).copied().unwrap_or(0) * page_size();
+        let exe = fs::read_link(format!("{dir}/exe")).ok().map(|p| p.to_string_lossy().trim_end_matches(" (deleted)").to_owned());
+        let path = exe.unwrap_or_else(|| {
+            let cmdline = fs::read(format!("{dir}/cmdline")).unwrap_or_default();
+            let first = cmdline.split(|b| *b == 0).next().unwrap_or_default();
+            String::from_utf8_lossy(first).into_owned()
+        });
+        // `comm` is cut at 15 bytes: the executable's whole name where it begins with it.
+        let whole = base_name(&path);
+        let name = if comm.len() >= 15 && whole.starts_with(comm) { whole.to_owned() } else { comm.to_owned() };
+        let clock = clock_ticks();
+        Some(RawProc {
+            pid,
+            ppid: num(1) as i32,
+            uid,
+            user: user_name(uid),
+            name,
+            path: if path.is_empty() { comm.to_owned() } else { path },
+            cpu_ns: (num(11) + num(12)) * 1_000_000_000 / clock,
+            memory: resident.saturating_sub(shared),
+            resident,
+            threads: u32::try_from(num(17)).ok(),
+            started: boot_time() + num(19) / clock,
+            detailed: uid == me,
+        })
+    }
+
+    /// Every process `/proc` lists. Another user's is read in full too, so `others` changes
+    /// nothing here.
+    pub fn take(_others: bool) -> Result<RawSample, String> {
+        let me = unsafe { getuid() };
+        let entries = fs::read_dir("/proc").map_err(|e| format!("Couldn’t list the processes: {e}"))?;
+        let procs: Vec<RawProc> = entries
+            .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok())
+            .filter_map(|pid| read(pid, me))
+            .collect();
+        if procs.is_empty() {
+            return Err("Couldn’t list the processes.".into());
+        }
+        let celsius = temperature();
+        let system = RawSystem { cpu_temperature: celsius, thermal: celsius.map(linux_thermal), ..counters()? };
+        Ok(RawSample { procs, system })
+    }
+
+    pub fn alive(pid: i32) -> bool {
+        let signalled = unsafe { kill(pid, 0) };
+        signalled == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1)
+    }
+
+    /// SIGTERM, or SIGKILL when forced; the errno when refused.
+    pub fn end(pid: i32, force: bool) -> Result<(), i32> {
+        let signal = if force { 9 } else { 15 };
+        if unsafe { kill(pid, signal) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_linux_proc_files() {
+        let stat = "cpu  1599739 4221 94041 4691081 103801 0 3052 0 0 0\ncpu0 1 2 3 4\n";
+        assert_eq!(parse_cpu_ticks(stat), Some([1_599_739, 97_093, 4_794_882, 4221]));
+        let info = parse_meminfo("MemTotal:  8000 kB\nMemAvailable:    4000 kB\n");
+        assert_eq!(info.get("MemAvailable"), Some(&4000));
+        let (comm, fields) = parse_proc_stat("42 (Web Content (x)) S 1 42 42 0 -1 4194560 10 0 0 0 7 3").unwrap();
+        assert_eq!(comm, "Web Content (x)");
+        assert_eq!(fields[0], "S");
+        assert_eq!(fields[1], "1");
+        assert_eq!(fields[11], "7");
+    }
+
+    #[test]
+    fn names_linux_memory_pressure_in_macos_levels() {
+        assert_eq!(linux_pressure(0.5, Some(0.1)), 1);
+        assert_eq!(linux_pressure(0.1, None), 2);
+        assert_eq!(linux_pressure(0.5, Some(12.0)), 2);
+        assert_eq!(linux_pressure(0.03, None), 4);
+        assert_eq!(linux_thermal(46.0), 0);
+        assert_eq!(linux_thermal(85.0), 1);
+        assert_eq!(linux_thermal(97.0), 3);
+    }
 
     #[test]
     fn reads_ps_cpu_times() {

@@ -110,7 +110,7 @@ impl PortWatch {
         let name = self.last.iter().find(|s| s.pid as i32 == pid).map_or_else(|| format!("Process {pid}"), |s| s.name.clone());
         let what = format!("{name} on port {port}");
         if pid <= 1 {
-            return Ended { ok: false, message: format!("{name} is part of macOS and can’t be stopped.") };
+            return Ended { ok: false, message: format!("{name} is part of the system and can’t be stopped.") };
         }
         if pid == std::process::id() as i32 {
             return Ended { ok: false, message: "To quit Magnitor, use Quit Magnitor.".into() };
@@ -299,7 +299,7 @@ fn is_dev_app(app: &str) -> bool {
 /// A developer's server: not part of macOS, and not inside an app unless that app is a
 /// developer's tool.
 pub fn is_dev(path: &str, app: &str) -> bool {
-    let system = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/"].iter().any(|p| path.starts_with(p));
+    let system = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/", "/usr/lib/systemd/", "/lib/systemd/"].iter().any(|p| path.starts_with(p));
     !system && (app.is_empty() || is_dev_app(app))
 }
 
@@ -344,9 +344,38 @@ fn read() -> Result<Vec<RawServer>, String> {
     Ok(by.into_values().collect())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Each listening socket in `/proc/net/tcp` and `tcp6` whose inode one of this user's processes
+/// holds, as servers: one per process and port.
+#[cfg(target_os = "linux")]
 fn read() -> Result<Vec<RawServer>, String> {
-    Err("Ports are read on macOS.".into())
+    let listeners = linux::listeners()?;
+    let mut by: BTreeMap<(i32, u16), RawServer> = BTreeMap::new();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    for l in listeners {
+        if let Some(s) = by.get_mut(&(l.pid, l.port)) {
+            s.exposed |= l.exposed;
+            continue;
+        }
+        let started = linux::started(l.pid);
+        by.insert(
+            (l.pid, l.port),
+            RawServer {
+                pid: l.pid,
+                port: l.port,
+                exposed: l.exposed,
+                path: linux::pid_path(l.pid),
+                cwd: linux::cwd(l.pid),
+                args: linux::args(l.pid),
+                running: started.filter(|&s| s > 0 && s <= now).map(|s| now - s),
+            },
+        );
+    }
+    Ok(by.into_values().collect())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn read() -> Result<Vec<RawServer>, String> {
+    Err("Ports are read on macOS and Linux.".into())
 }
 
 /// Each process's working directory, for the cleanup's "in use" (`devclean`): this user's
@@ -364,9 +393,129 @@ pub fn working_dirs() -> Vec<(i32, String, PathBuf)> {
         .collect()
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+pub fn working_dirs() -> Vec<(i32, String, PathBuf)> {
+    let me = std::process::id() as i32;
+    linux::pids()
+        .into_iter()
+        .filter(|&pid| pid > 1 && pid != me)
+        .filter_map(|pid| {
+            let cwd = linux::cwd(pid);
+            (!cwd.is_empty() && cwd != "/").then(|| (pid, crate::sample::base_name(&linux::pid_path(pid)).to_owned(), PathBuf::from(cwd)))
+        })
+        .collect()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn working_dirs() -> Vec<(i32, String, PathBuf)> {
     Vec::new()
+}
+
+/// `/proc/net/tcp` (and `tcp6`), one socket a line: `sl local_address rem_address st … uid
+/// timeout inode`, the address hex `ADDR:PORT`, the state `0A` for LISTEN. Each listening
+/// socket's inode, its port, and whether it is reachable from other machines.
+pub fn parse_proc_net_tcp(text: &str) -> Vec<(u64, u16, bool)> {
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if f.len() < 10 || f[3] != "0A" {
+                return None;
+            }
+            let (addr, port) = f[1].split_once(':')?;
+            let port = u16::from_str_radix(port, 16).ok()?;
+            let inode = f[9].parse::<u64>().ok()?;
+            // IPv4 is one 32-bit word in host (little-endian) order: 127.x.x.x ends in `7F`.
+            // IPv6 is four such words: `::1` is three zero words and `01000000`;
+            // `::ffff:127.x.x.x` is `0000…FFFF0000` and a word ending in `7F`.
+            let loopback = match addr.len() {
+                8 => addr.ends_with("7F"),
+                32 => addr == "00000000000000000000000001000000" || (addr.starts_with("0000000000000000FFFF0000") && addr.ends_with("7F")),
+                _ => false,
+            };
+            (port > 0 && inode > 0).then_some((inode, port, !loopback))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::RawListener;
+    use std::collections::HashMap;
+    use std::fs;
+
+    unsafe extern "C" {
+        fn sysconf(name: i32) -> i64;
+    }
+    const SC_CLK_TCK: i32 = 2;
+
+    pub fn pids() -> Vec<i32> {
+        fs::read_dir("/proc")
+            .map(|d| d.filter_map(|e| e.ok()?.file_name().to_str()?.parse::<i32>().ok()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Every listening TCP socket whose holder this user can see: the kernel lists every
+    /// socket, but only one's own processes' descriptors name their inodes.
+    pub fn listeners() -> Result<Vec<RawListener>, String> {
+        let mut sockets: HashMap<u64, (u16, bool)> = HashMap::new();
+        let mut read_any = false;
+        for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+            if let Ok(text) = fs::read_to_string(table) {
+                read_any = true;
+                for (inode, port, exposed) in super::parse_proc_net_tcp(&text) {
+                    sockets.insert(inode, (port, exposed));
+                }
+            }
+        }
+        if !read_any {
+            return Err("Couldn’t read the ports.".into());
+        }
+        let mut out = Vec::new();
+        if sockets.is_empty() {
+            return Ok(out);
+        }
+        for pid in pids() {
+            let Ok(fds) = fs::read_dir(format!("/proc/{pid}/fd")) else { continue };
+            for fd in fds.flatten() {
+                let Ok(target) = fs::read_link(fd.path()) else { continue };
+                let target = target.to_string_lossy();
+                let Some(inode) = target.strip_prefix("socket:[").and_then(|t| t.strip_suffix(']')).and_then(|t| t.parse::<u64>().ok()) else { continue };
+                if let Some(&(port, exposed)) = sockets.get(&inode) {
+                    out.push(RawListener { pid, port, exposed });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn pid_path(pid: i32) -> String {
+        fs::read_link(format!("/proc/{pid}/exe")).map_or_else(
+            |_| args(pid).into_iter().next().unwrap_or_default(),
+            |p| p.to_string_lossy().trim_end_matches(" (deleted)").to_owned(),
+        )
+    }
+
+    pub fn cwd(pid: i32) -> String {
+        fs::read_link(format!("/proc/{pid}/cwd")).map_or(String::new(), |p| p.to_string_lossy().into_owned())
+    }
+
+    pub fn args(pid: i32) -> Vec<String> {
+        let raw = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        raw.split(|&b| b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect()
+    }
+
+    /// Seconds since 1970 the process started at: boot time plus `stat`'s starttime.
+    pub fn started(pid: i32) -> Option<u64> {
+        let line = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let (_, f) = crate::sample::parse_proc_stat(&line)?;
+        let ticks = f.get(19)?.parse::<u64>().ok()?;
+        let stat = fs::read_to_string("/proc/stat").ok()?;
+        let boot = stat.lines().find_map(|l| l.strip_prefix("btime ")).and_then(|v| v.trim().parse::<u64>().ok())?;
+        // SAFETY: sysconf reads a constant.
+        let clock = unsafe { sysconf(SC_CLK_TCK) }.max(1) as u64;
+        Some(boot + ticks / clock)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -632,6 +781,33 @@ mod tests {
     }
 
     /// A socket this test opens is read back with its port, from this process.
+    #[test]
+    fn reads_proc_net_tcp() {
+        let v4 = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 111 1 0 100 0 0 10 0
+   1: 00000000:1538 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 222 1 0 100 0 0 10 0
+   2: 0100007F:0BB8 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1000        0 333 1 0 100 0 0 10 0
+";
+        assert_eq!(parse_proc_net_tcp(v4), vec![(111, 3000, false), (222, 5432, true)]);
+        let v6 = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000001000000:1F90 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 444 1 0 100 0 0 10 0
+   1: 00000000000000000000000000000000:1F91 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 555 1 0 100 0 0 10 0
+";
+        assert_eq!(parse_proc_net_tcp(v6), vec![(444, 8080, false), (555, 8081, true)]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reads_a_listening_socket_on_linux() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let me = std::process::id() as i32;
+        let found = linux::listeners().unwrap();
+        assert!(found.iter().any(|l| l.pid == me && l.port == port && !l.exposed), "{found:?}");
+        assert!(linux::started(me).is_some());
+        assert!(!linux::args(me).is_empty());
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn reads_a_listening_socket() {

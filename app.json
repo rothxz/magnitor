@@ -1,18 +1,4 @@
 {
-  "$schema": "../exact/scripts/app.schema.json",
-  "name": "Magnitor",
-  "short_name": "Magnitor",
-  "id": "com.magnitor.app",
-  "start_url": "/",
-  "display": "standalone",
-  "icons": [
-    { "src": "assets/icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
-    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
-  ],
-  "app": {
-    "id": "com.magnitor.app",
-    "name": "Magnitor"
-  },
   "host": {
     "web": {},
     "macos": {
@@ -22,13 +8,39 @@
         "height": 620
       },
       "activationPolicy": "accessory"
-    }
+    },
+    "linux": {}
   },
   "deploy": {
     "store": {
       "web": "0",
-      "macos": "0"
+      "macos": "0",
+      "linux": "0"
     }
+  },
+  "$schema": "../exact/scripts/app.schema.json",
+  "name": "Magnitor",
+  "short_name": "Magnitor",
+  "id": "com.magnitor.app",
+  "start_url": "/",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "assets/icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "app": {
+    "id": "com.magnitor.app",
+    "name": "Magnitor"
   },
   "rust": {
     "data": {

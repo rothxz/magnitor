@@ -32,10 +32,10 @@ pub mod watchdog;
 mod shapes {
     include!(concat!(env!("OUT_DIR"), "/shapes.rs"));
 }
-use shapes::{AppIcon, Contents, ContractValue, Item, Slice, Usage};
+use shapes::{AppIcon, Contents, ContractValue, Host, Item, Slice, Usage};
 
 /// The sources this crate answers; app.ts answers the others.
-pub const RUST_SOURCES: &[&str] = &["usage", "contents", "tasks", "process", "endProcess", "vitals", "appIcon", "appGroup", "endApp", "ports", "stopPort", "devFiles", "devCommands", "runDevCommand", "unusual"];
+pub const RUST_SOURCES: &[&str] = &["usage", "contents", "tasks", "process", "endProcess", "vitals", "appIcon", "appGroup", "endApp", "ports", "stopPort", "devFiles", "devCommands", "runDevCommand", "unusual", "host"];
 
 /// A measured folder: its id in the view, its name, its group, and where it is under home.
 struct Measured {
@@ -128,10 +128,16 @@ impl Magnitor {
     }
 }
 
+/// The system this runs on, known at launch: Linux's tray window is the popover (app.contract's `tray`).
+fn host() -> Host {
+    Host { platform: std::env::consts::OS.into() }
+}
+
 impl DataSource for Magnitor {
-    /// Nothing is known before the walk or a reading: every resource is asked at launch.
+    /// Nothing but the host is known before the walk or a reading: every other resource is asked at launch.
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         match source {
+            "host" => Ok(host().to_value()),
             "usage" | "contents" | "tasks" | "process" | "endProcess" | "vitals" | "appIcon" | "appGroup" | "endApp" | "ports" | "stopPort" | "devFiles" | "devCommands" | "runDevCommand" | "unusual" => Err(DataError::Unavailable("measured at run time".into())),
             _ => Err(DataError::UnknownSource(source.into())),
         }
@@ -144,6 +150,7 @@ impl DataSource for Magnitor {
         };
         let text = |i: usize| args.get(i).and_then(Value::as_str).ok_or_else(|| DataError::BadArguments(source.into()));
         match source {
+            "host" => Ok(Answer::Now(host().to_value())),
             "usage" => Ok(Answer::Now(self.usage(number(0)?).to_value())),
             "contents" => Ok(Answer::Now(self.contents(text(0)?, number(1)?).to_value())),
             // Grouped by app unless the view says otherwise.

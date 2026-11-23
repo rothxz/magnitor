@@ -1,0 +1,2822 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index a509c55f5..dc532793c 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -248,6 +248,12 @@ version = "0.7.8"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+ 
++[[package]]
++name = "as-raw-xcb-connection"
++version = "1.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
++
+ [[package]]
+ name = "ash"
+ version = "0.38.0+1.3.281"
+@@ -1211,6 +1217,15 @@ dependencies = [
+  "smallvec",
+ ]
+ 
++[[package]]
++name = "ctor"
++version = "0.10.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "83cf0d42651b16c6dfe68685716d18480d18a9c39c62d76e8cf3eb6ed5d8bcbf"
++dependencies = [
++ "dtor",
++]
++
+ [[package]]
+ name = "ctutils"
+ version = "0.4.8"
+@@ -1418,6 +1433,12 @@ dependencies = [
+  "dtoa",
+ ]
+ 
++[[package]]
++name = "dtor"
++version = "0.8.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
++
+ [[package]]
+ name = "duo-lab-apple"
+ version = "0.1.0"
+@@ -1922,6 +1943,7 @@ dependencies = [
+  "softbuffer",
+  "tiny-skia 0.12.0",
+  "winit",
++ "x11rb",
+ ]
+ 
+ [[package]]
+@@ -2790,6 +2812,16 @@ dependencies = [
+  "geofence-fixture-data",
+ ]
+ 
++[[package]]
++name = "gethostname"
++version = "1.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
++dependencies = [
++ "rustix 1.1.4",
++ "windows-link",
++]
++
+ [[package]]
+ name = "getrandom"
+ version = "0.2.17"
+@@ -6031,6 +6063,7 @@ version = "0.4.8"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "aac18da81ebbf05109ab275b157c22a653bb3c12cf884450179942f81bcbf6c3"
+ dependencies = [
++ "as-raw-xcb-connection",
+  "bytemuck",
+  "fastrand",
+  "js-sys",
+@@ -6044,6 +6077,7 @@ dependencies = [
+  "raw-window-handle",
+  "redox_syscall 0.5.18",
+  "rustix 1.1.4",
++ "tiny-xlib",
+  "tracing",
+  "wasm-bindgen",
+  "wayland-backend",
+@@ -6051,6 +6085,7 @@ dependencies = [
+  "wayland-sys",
+  "web-sys",
+  "windows-sys 0.61.2",
++ "x11rb",
+ ]
+ 
+ [[package]]
+@@ -6552,6 +6587,19 @@ dependencies = [
+  "strict-num",
+ ]
+ 
++[[package]]
++name = "tiny-xlib"
++version = "0.2.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a90a0ca3ee6a69f2ad28fd11621a4c3f03b371f366be500b64df260c4ffbafb4"
++dependencies = [
++ "as-raw-xcb-connection",
++ "ctor",
++ "libloading",
++ "pkg-config",
++ "tracing",
++]
++
+ [[package]]
+ name = "tinystr"
+ version = "0.8.4"
+@@ -7989,6 +8037,7 @@ dependencies = [
+  "atomic-waker",
+  "bitflags 2.13.1",
+  "block2 0.5.1",
++ "bytemuck",
+  "calloop",
+  "cfg_aliases",
+  "concurrent-queue",
+@@ -8005,6 +8054,7 @@ dependencies = [
+  "objc2-foundation 0.2.2",
+  "objc2-ui-kit",
+  "orbclient",
++ "percent-encoding",
+  "pin-project",
+  "raw-window-handle",
+  "redox_syscall 0.4.1",
+@@ -8023,6 +8073,8 @@ dependencies = [
+  "web-sys",
+  "web-time",
+  "windows-sys 0.52.0",
++ "x11-dl",
++ "x11rb",
+  "xkbcommon-dl",
+ ]
+ 
+@@ -8068,6 +8120,38 @@ dependencies = [
+  "tap",
+ ]
+ 
++[[package]]
++name = "x11-dl"
++version = "2.21.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "38735924fedd5314a6e548792904ed8c6de6636285cb9fec04d5b1db85c1516f"
++dependencies = [
++ "libc",
++ "once_cell",
++ "pkg-config",
++]
++
++[[package]]
++name = "x11rb"
++version = "0.13.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414"
++dependencies = [
++ "as-raw-xcb-connection",
++ "gethostname",
++ "libc",
++ "libloading",
++ "once_cell",
++ "rustix 1.1.4",
++ "x11rb-protocol",
++]
++
++[[package]]
++name = "x11rb-protocol"
++version = "0.13.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
++
+ [[package]]
+ name = "xattr"
+ version = "1.6.1"
+diff --git a/host/linux/Cargo.toml b/host/linux/Cargo.toml
+index 94bddf905..6b3c2b623 100644
+--- a/host/linux/Cargo.toml
++++ b/host/linux/Cargo.toml
+@@ -15,6 +15,7 @@ name = "exact_linux"
+ crate-type = ["rlib"]
+ 
+ [dependencies]
++exact-kernel = { path = "../../kernel" }
+ exact-painted = { path = "../painted" }
+ exact-runner = { path = "../../runner" }
+ tiny-skia = "0.12"
+@@ -26,8 +27,9 @@ getrandom = "0.3"
+ drm = "0.15"
+ evdev = "0.13"
+ serde_json = "1"
+-softbuffer = { version = "0.4.8", default-features = false, features = ["wayland", "wayland-dlopen"] }
+-winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
++softbuffer = { version = "0.4.8", default-features = false, features = ["wayland", "wayland-dlopen", "x11", "x11-dlopen"] }
++x11rb = "0.13"
++winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "wayland", "wayland-dlopen", "wayland-csd-adwaita", "x11"] }
+ 
+ [dev-dependencies]
+ exact-logic = { path = "../../logic" }
+diff --git a/host/linux/src/window.rs b/host/linux/src/window.rs
+index 4ff5a2a57..3bb0b5cea 100644
+--- a/host/linux/src/window.rs
++++ b/host/linux/src/window.rs
+@@ -1,8 +1,27 @@
+ //! A Wayland window presents Exact's painted frames through a compositor
+ //! surface. Winit waits for compositor input, keyboard repeats and presenter work.
++//!
++//! An app with a status button that the desktop's tray takes (`tray`) shows
++//! no window at its launch: the window is made when the item is clicked and
++//! destroyed when it is put away (Wayland has no hidden toplevel), while
++//! the presenter, and the page, run on.
++//!
++//! The tray's window hangs below the item, as the Mac's popover does. A
++//! Wayland client cannot place a toplevel (the compositor does, and GNOME
++//! centres it), so an app the tray takes runs its window through XWayland
++//! when there is one, and opens it at the point the tray says was clicked.
++//! The page boots before the event loop is made, so that choice is known.
++//!
++//! The tray's window looks as the shell's own menus from the tray do
++//! (GNOME's popup menu, Yaru's): their surface and border colours, its
++//! corners rounded and clear, 6 points below the top bar. Opened from a
++//! click, it points at the item with an arrow, as the Mac's popover does:
++//! up from below a top bar, or down from above a bottom panel.
+ 
+ mod caret;
+ mod input;
++mod shortcuts;
++mod tray;
+ 
+ use crate::event_loop::LocalPlan;
+ use exact_painted::app::{boot_presenter, Config};
+@@ -13,14 +32,74 @@ use exact_runner::DataSource;
+ use std::cell::Cell;
+ use std::num::NonZeroU32;
+ use std::rc::Rc;
+-use std::sync::Arc;
++use std::sync::{Arc, OnceLock};
+ use std::time::{Duration, Instant};
+ use winit::application::ApplicationHandler;
+-use winit::dpi::LogicalSize;
++use winit::dpi::{LogicalPosition, LogicalSize};
+ use winit::event::WindowEvent;
+-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+-use winit::platform::wayland::WindowAttributesExtWayland;
+-use winit::window::{Theme, Window, WindowId};
++use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
++use winit::platform::wayland::{EventLoopBuilderExtWayland, WindowAttributesExtWayland};
++use winit::platform::x11::{EventLoopBuilderExtX11, WindowAttributesExtX11};
++use winit::window::{Theme, Window, WindowAttributes, WindowId};
++
++/// Logical pixels between the tray's click and the window's top edge, and
++/// kept clear of the screen's sides.
++const GAP: f64 = 8.;
++
++/// Logical pixels between the top bar and the tray's window: GNOME's
++/// `-arrow-rise` for a panel menu.
++const RISE: f64 = 6.;
++
++/// The arrow from the tray's window to the item, logical pixels: its
++/// height, the width of its base, and the gap between its tip and the
++/// panel the item is in.
++const ARROW_HEIGHT: f64 = 9.;
++const ARROW_BASE: f64 = 20.;
++const TIP: f64 = 2.;
++
++/// The tray window's arrow: how far its tip is from the window's left
++/// (logical pixels), and whether it points down, the window hanging above
++/// a bottom panel.
++#[derive(Clone, Copy)]
++struct Arrow {
++    x: f64,
++    down: bool,
++}
++
++/// The arrow's height in a window's pixels at `scale`.
++fn arrow_rows(scale: f64) -> u32 {
++    (ARROW_HEIGHT * scale).round() as u32
++}
++
++/// GNOME's popup menu (`.popup-menu-content`, Yaru): its corner radius
++/// and border width, logical pixels.
++const RADIUS: f32 = 16.8;
++const BORDER: f32 = 1.;
++
++/// The roles the tray's window takes from GNOME's popup menu, light and
++/// dark (RGBA): its surface (the neutral look's raised panel, which a
++/// popover is, and a field's ground), a control raised on it (a button's,
++/// a segmented track's), and its separators.
++const POPUP_ROLES: [(&str, [u8; 4], [u8; 4]); 3] = [
++    (
++        "-exact-secondary-grouped-background",
++        [0xff, 0xff, 0xff, 0xff],
++        [0x36, 0x36, 0x3a, 0xff],
++    ),
++    (
++        "-exact-background",
++        [0xeb, 0xeb, 0xeb, 0xff],
++        [0x42, 0x42, 0x47, 0xff],
++    ),
++    (
++        "-exact-separator",
++        [0, 0, 0, 0x1a],
++        [0xff, 0xff, 0xff, 0x1a],
++    ),
++];
++
++/// The popup menu's border, light and dark (RGB).
++const POPUP_BORDER: [[u8; 3]; 2] = [[0xed, 0xed, 0xed], [0x42, 0x42, 0x47]];
+ 
+ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant) -> i32 {
+     let mut app = App::<D> {
+@@ -28,9 +107,11 @@ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant
+         config,
+         started,
+         live: None,
++        proxy: Arc::default(),
+         settings: WindowSettings::default(),
+         error: None,
+         closed: Rc::new(Cell::new(false)),
++        x11: false,
+     };
+     let result = app.run();
+     if let Some(live) = &mut app.live {
+@@ -49,6 +130,9 @@ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant
+ enum Event {
+     Wake,
+     Settings(WindowSettings),
++    Tray(exact_painted::status_notifier::Heard),
++    /// A global shortcut's chord was pressed.
++    Shortcut(String),
+ }
+ 
+ struct App<'a, D: DataSource> {
+@@ -56,44 +140,94 @@ struct App<'a, D: DataSource> {
+     local_plan: Option<LocalPlan>,
+     started: Instant,
+     live: Option<Live<D>>,
++    /// The loop's proxy, once the loop is made: what is sent before it
++    /// (the page booting, a click) is dropped, and the loop's first turn
++    /// reads the page anyway.
++    proxy: Arc<OnceLock<EventLoopProxy<Event>>>,
+     settings: WindowSettings,
+     error: Option<String>,
+     closed: Rc<Cell<bool>>,
++    /// The window is XWayland's (`use_x11`), so it can be placed.
++    x11: bool,
+ }
+ 
+ struct Live<D: DataSource> {
+-    surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
+-    window: Rc<Window>,
++    /// The window, while one shows.
++    view: Option<View>,
+     presenter: Presenter<D>,
+     input: input::Input,
+-    extent: (u32, u32, f32),
+     presented: bool,
+     app_name: String,
++    id: String,
+     title: WindowTitle,
+     caret: caret::Blink,
++    tray: Option<tray::Tray>,
++    /// The tray's window has had the focus since it showed: losing it
++    /// then puts the window away, as a click outside closes the Mac's
++    /// popover.
++    focused: bool,
++    /// The window can be placed (X11): it opens below the tray's click.
++    x11: bool,
++    /// The host's global shortcuts.
++    desktop: Rc<shortcuts::Desktop>,
++    /// Where the tray's item was last clicked: a popover the page opens
++    /// itself (a global shortcut) points there too.
++    last_click: Option<(i32, i32)>,
++}
++
++struct View {
++    surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
++    window: Rc<Window>,
++    extent: (u32, u32, f32),
++    /// The arrow to the tray's item, for a window opened from a click.
++    arrow: Option<Arrow>,
+ }
+ 
+ impl<D: DataSource + Default> App<'_, D> {
+     fn run(&mut self) -> Result<(), String> {
+-        let events = EventLoop::<Event>::with_user_event()
+-            .build()
+-            .map_err(|error| error.to_string())?;
+-        let proxy = events.create_proxy();
++        let send = {
++            let proxy = self.proxy.clone();
++            move |event: Event| {
++                if let Some(proxy) = proxy.get() {
++                    let _ = proxy.send_event(event);
++                }
++            }
++        };
++        let to_loop = send.clone();
+         let settings = exact_painted::desktop::watch_window_settings(move |settings| {
+-            let _ = proxy.send_event(Event::Settings(settings));
++            to_loop(Event::Settings(settings));
+         });
+         self.settings = settings.as_ref().map(|s| s.initial).unwrap_or_default();
+-        let wake = events.create_proxy();
+-        exact_painted::set_event_waker(Some(Arc::new(move || {
+-            let _ = wake.send_event(Event::Wake);
+-        })));
+-        let result = events.run_app(self);
++        let wake = send.clone();
++        exact_painted::set_event_waker(Some(Arc::new(move || wake(Event::Wake))));
++        let result = self.boot_and_run(send);
+         exact_painted::set_event_waker(None);
+-        result.map_err(|error| error.to_string())?;
++        result?;
+         self.error.take().map_or(Ok(()), Err)
+     }
+ 
+-    fn open(&mut self, events: &ActiveEventLoop) -> Result<Live<D>, String> {
++    fn boot_and_run(&mut self, send: impl Fn(Event) + Clone + Send + Sync + 'static) -> Result<(), String> {
++        let mut live = self.open(send)?;
++        self.x11 = live.tray.is_some() && use_x11();
++        live.x11 = self.x11;
++        if live.tray.is_some() {
++            live.presenter.report_role_colors(&POPUP_ROLES);
++        }
++        self.live = Some(live);
++        let mut builder = EventLoop::<Event>::with_user_event();
++        if self.x11 {
++            builder.with_x11();
++        } else {
++            builder.with_wayland();
++        }
++        let events = builder.build().map_err(|error| error.to_string())?;
++        let _ = self.proxy.set(events.create_proxy());
++        events.run_app(self).map_err(|error| error.to_string())
++    }
++
++    /// Boot the page, and give its status button to the tray, before the
++    /// event loop is made.
++    fn open(&mut self, send: impl Fn(Event) + Clone + Send + Sync + 'static) -> Result<Live<D>, String> {
+         let receipt: serde_json::Value =
+             serde_json::from_str(&self.config.compat).unwrap_or_default();
+         let id = receipt["inputs"]["app"]
+@@ -106,23 +240,9 @@ impl<D: DataSource + Default> App<'_, D> {
+             .unwrap_or(&id)
+             .to_owned();
+         let dark = self.settings.dark;
+-        let window = Rc::new(
+-            events
+-                .create_window(
+-                    Window::default_attributes()
+-                        .with_name(id, "")
+-                        .with_title(&app_name)
+-                        .with_theme(dark.map(theme))
+-                        .with_inner_size(LogicalSize::new(self.config.size.0, self.config.size.1)),
+-                )
+-                .map_err(|error| error.to_string())?,
+-        );
+-        let context =
+-            softbuffer::Context::new(window.clone()).map_err(|error| error.to_string())?;
+-        let surface = softbuffer::Surface::new(&context, window.clone())
+-            .map_err(|error| error.to_string())?;
+-        let size = window.inner_size();
+-        let scale = window.scale_factor() as f32;
++        // The page boots before its window: an app the tray takes shows
++        // none. The window's own size and scale reach it at its first draw.
++        let scale = self.config.scale.max(1.);
+         self.config.scale = scale;
+         self.config.clock_started = Some(self.started);
+         let defaults = self.config.preferences;
+@@ -132,11 +252,21 @@ impl<D: DataSource + Default> App<'_, D> {
+                 .get_or_insert_with(Default::default)
+                 .dark = dark;
+         }
++        // The desktop's interface font is `sans-serif`, as a GNOME app's
++        // text is set in it, unless `EXACT_FONT` names another.
++        if std::env::var_os("EXACT_FONT").is_none() {
++            if let Some(family) = exact_painted::desktop::interface_font_family() {
++                std::env::set_var("EXACT_FONT", family);
++            }
++        }
++        // The services before the page boots: its first reading of a
++        // global shortcut asks them.
++        let to_loop = send.clone();
++        let desktop = shortcuts::Desktop::install(&app_name, move |keys| {
++            to_loop(Event::Shortcut(keys));
++        });
+         exact_runner::page::set_awaits_present(true);
+-        let boot = boot_presenter::<D>(
+-            self.config,
+-            (size.width as f32 / scale, size.height as f32 / scale),
+-        );
++        let boot = boot_presenter::<D>(self.config, self.config.size);
+         self.config.preferences = defaults;
+         let (mut presenter, warning) = boot?;
+         warn(warning);
+@@ -145,21 +275,35 @@ impl<D: DataSource + Default> App<'_, D> {
+         presenter.set_system_scheme(dark.unwrap_or_else(|| defaults.unwrap_or_default().dark));
+         let closed = self.closed.clone();
+         presenter.set_window_closer(move || closed.set(true));
+-        window.request_redraw();
+-        Ok(Live {
+-            surface,
+-            window,
++        let tray = tray::Tray::start(&mut presenter, &id, &app_name, send);
++        let mut live = Live {
++            view: None,
+             presenter,
+             input: input::Input::default(),
+-            extent: (size.width, size.height, scale),
+             presented: false,
+             app_name,
++            id,
+             title: WindowTitle::default(),
+             caret: caret::Blink::default(),
+-        })
++            tray,
++            focused: false,
++            x11: false,
++            desktop,
++            last_click: None,
++        };
++        if live.tray.is_some() {
++            live.tell_page(true);
++        }
++        Ok(live)
+     }
+ }
+ 
++/// The tray's window goes through XWayland, which lets it be placed, when
++/// there is an X display.
++fn use_x11() -> bool {
++    std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty())
++}
++
+ fn theme(dark: bool) -> Theme {
+     if dark {
+         Theme::Dark
+@@ -183,7 +327,39 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
+         if let Some(plan) = &mut self.local_plan {
+             plan.poll(&mut live.presenter, D::default);
+         }
+-        live.input.update_ime(&mut live.presenter, &live.window);
++        if let Some(tray) = &mut live.tray {
++            tray.sync(&mut live.presenter);
++            // The popover the window stands in for closed (Escape, a
++            // choice, a click beside it): the window goes with it.
++            let open = (tray.item.as_ref())
++                .is_some_and(|item| live.presenter.status_popover_open(item.node));
++            let presses = item_presses(tray);
++            if live.view.is_some() && !open && !presses {
++                live.hide();
++            } else if live.view.is_none() && open && !presses {
++                // The page opened the popover itself (a global shortcut, a
++                // notification's click): the window shows it, pointing
++                // where the item was last clicked.
++                let click = live.last_click;
++                if let Err(error) = live.show(events, self.settings.dark, click) {
++                    eprintln!("exact: tray: {error}");
++                } else if let Some(view) = &live.view {
++                    view.window.focus_window();
++                }
++            }
++        }
++        let Some(view) = &live.view else {
++            // Nothing shows: a frame painted to pixels stands for the
++            // launch's first, as a hidden window's does.
++            live.presenter.first_pixel_unshown();
++            let wait = live.presenter.turn_due_ms(now);
++            let deadline =
++                wait.and_then(|ms| at.checked_add(Duration::try_from_secs_f64(ms / 1000.0).ok()?));
++            events.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
++            return;
++        };
++        let window = view.window.clone();
++        live.input.update_ime(&mut live.presenter, &window);
+         let caret = live.caret.update(
+             &mut live.presenter,
+             live.input.active(),
+@@ -195,7 +371,7 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
+             || live.presenter.wants_frames()
+             || live.presenter.needs_animation_frame()
+         {
+-            live.window.request_redraw();
++            window.request_redraw();
+         }
+         let mut wait = live.presenter.turn_due_ms(now);
+         if let caret::Next::At(at) = caret {
+@@ -210,9 +386,25 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
+         events.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+     }
+ 
+-    fn user_event(&mut self, _: &ActiveEventLoop, event: Event) {
+-        let Event::Settings(settings) = event else {
+-            return;
++    fn user_event(&mut self, events: &ActiveEventLoop, event: Event) {
++        let settings = match event {
++            Event::Settings(settings) => settings,
++            Event::Tray(heard) => {
++                if let Some(live) = &mut self.live {
++                    let now = self.started.elapsed().as_secs_f64() * 1000.0;
++                    if let Err(error) = live.clicked(events, &heard, now, self.settings.dark) {
++                        eprintln!("exact: tray: {error}");
++                    }
++                }
++                return;
++            }
++            Event::Shortcut(keys) => {
++                if let Some(live) = &mut self.live {
++                    live.desktop.pressed(&keys);
++                }
++                return;
++            }
++            Event::Wake => return,
+         };
+         let previous = std::mem::replace(&mut self.settings, settings);
+         if let Some(live) = &mut self.live {
+@@ -224,34 +416,55 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
+             if previous.dark == dark {
+                 return;
+             }
+-            live.window.set_theme(dark.map(theme));
++            if let Some(view) = &live.view {
++                view.window.set_theme(dark.map(theme));
++            }
+             let mut preferences = live.presenter.host().runner().viewport().preferences;
+             preferences.dark =
+                 dark.unwrap_or_else(|| self.config.preferences.unwrap_or_default().dark);
+             live.presenter.set_system_scheme(preferences.dark);
+             warn(live.presenter.set_preferences(preferences));
+-            live.window.request_redraw();
++            if let Some(view) = &live.view {
++                view.window.request_redraw();
++            }
+         }
+     }
+ 
+     fn resumed(&mut self, events: &ActiveEventLoop) {
+-        if self.live.is_none() {
+-            match self.open(events) {
+-                Ok(live) => self.live = Some(live),
+-                Err(error) => {
+-                    self.error = Some(error);
+-                    events.exit();
+-                }
+-            }
++        // The page booted before the loop; an app the tray did not take
++        // shows its window now.
++        let Some(live) = self.live.as_mut() else {
++            return;
++        };
++        if live.tray.is_some() || live.presented || live.view.is_some() {
++            return;
++        }
++        if let Err(error) = live.show(events, self.settings.dark, None) {
++            self.error = Some(error);
++            events.exit();
+         }
+     }
+ 
+     fn window_event(&mut self, events: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+-        let Some(live) = self.live.as_mut().filter(|live| live.window.id() == id) else {
++        let Some(live) = self
++            .live
++            .as_mut()
++            .filter(|live| live.view.as_ref().is_some_and(|v| v.window.id() == id))
++        else {
+             return;
+         };
++        let window = live
++            .view
++            .as_ref()
++            .map(|v| v.window.clone())
++            .expect("filtered");
+         let now = self.started.elapsed().as_secs_f64() * 1000.0;
+         match event {
++            // An app in the tray runs on without its window.
++            WindowEvent::CloseRequested if live.tray.is_some() => {
++                warn(live.presenter.advance(now));
++                live.put_away(now);
++            }
+             WindowEvent::CloseRequested => {
+                 warn(live.presenter.advance(now));
+                 if live.presenter.before_unload(live.presenter.host().now()) {
+@@ -273,19 +486,21 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
+                 }
+             }
+             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+-                live.window.request_redraw();
++                window.request_redraw();
++            }
++            WindowEvent::Focused(false) if live.tray.is_some() && live.focused => {
++                warn(live.presenter.advance(now));
++                live.put_away(now);
+             }
+             event => {
+                 live.caret.input(&event, now);
+                 if let WindowEvent::Focused(focused) = &event {
+                     live.presenter.update_foreground(*focused);
++                    live.focused |= *focused;
+                 }
+                 warn(live.presenter.advance(now));
+                 let now = live.presenter.host().now();
+-                if let Err(error) = live
+-                    .input
+-                    .handle(&mut live.presenter, &live.window, event, now)
+-                {
++                if let Err(error) = live.input.handle(&mut live.presenter, &window, event, now) {
+                     eprintln!("exact: {error}");
+                 }
+             }
+@@ -293,7 +508,358 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
+     }
+ }
+ 
++/// The screen point a click on the tray item was at, when the tray gave one
++/// (some give zeros).
++fn click(heard: &exact_painted::status_notifier::Heard) -> Option<(i32, i32)> {
++    use exact_painted::status_notifier::Heard;
++    match *heard {
++        Heard::Activate(x, y) | Heard::SecondaryActivate(x, y) | Heard::ContextMenu(x, y)
++            if (x, y) != (0, 0) =>
++        {
++            Some((x, y))
++        }
++        _ => None,
++    }
++}
++
++/// The page's pixels (RGBA) as the tray's window shows them, premultiplied
++/// ARGB for a transparent X11 window: GNOME's popup menu's shape, its
++/// corners rounded and clear outside, with its border inside the edge.
++/// The window is `size` (pixels), the page `size`'s width and as tall as
++/// `rgba` holds, from row `page_top`. `arrow`, the tip's distance from the
++/// window's left (pixels) and whether it points down, joins a wedge to the
++/// page's top or bottom edge in the rows the page leaves, filled with the
++/// page's colour at that edge and bordered as the rest is.
++fn popup_pixels(
++    out: &mut [u32],
++    rgba: &[u8],
++    size: (u32, u32),
++    page_top: u32,
++    scale: f32,
++    border: [u8; 3],
++    arrow: Option<(f32, bool)>,
++) {
++    let (width, height) = size;
++    let pixels = rgba.as_chunks::<4>().0;
++    let page_rows = (pixels.len() as u32 / width.max(1)).min(height - page_top);
++    let w = width as f32;
++    let (top, bottom) = (page_top as f32, (page_top + page_rows) as f32);
++    let h = bottom - top;
++    let radius = (RADIUS * scale).min(w / 2.).min(h / 2.);
++    let line = (BORDER * scale).max(1.);
++    // The wedge: its tip, and its two sides' outward normals, unit length.
++    let wedge = arrow.map(|(x, down)| {
++        let rise = height as f32 - h;
++        let half = ARROW_BASE as f32 * scale / 2.;
++        let length = (rise * rise + half * half).sqrt();
++        let (tip, flip) = if down { (bottom + rise, 1.) } else { (top - rise, -1.) };
++        let left = (-rise / length, flip * half / length);
++        let right = (rise / length, flip * half / length);
++        (x, tip, left, right, down)
++    });
++    // The arrow's fill: the page's colour just inside the edge it leaves.
++    let fill = wedge.map(|(x, _, _, _, down)| {
++        let col = (x as u32).min(width - 1);
++        let inset = (line.ceil() as u32 + 1).min(page_rows - 1);
++        let row = if down { page_rows - 1 - inset } else { inset };
++        pixels[(row * width + col) as usize]
++    });
++    for (i, out) in out.iter_mut().enumerate().take((width * height) as usize) {
++        let (col, row) = (i as u32 % width, i as u32 / width);
++        let (x, y) = (col as f32 + 0.5, row as f32 + 0.5);
++        // How far inside the rounded edge: positive within the shape.
++        let dx = (radius - x).max(x - (w - radius)).max(0.);
++        let dy = (top + radius - y).max(y - (bottom - radius)).max(0.);
++        let mut inside = if dx > 0. && dy > 0. {
++            radius - (dx * dx + dy * dy).sqrt()
++        } else {
++            x.min(w - x).min((y - top).min(bottom - y))
++        };
++        // The wedge, open at its base, so no border runs across it; it
++        // reaches only past the border into the page, clear of its corners.
++        let reach = line + 2.;
++        let near = |down: bool| if down { y >= bottom - reach } else { y <= top + reach };
++        if let Some((ax, ty, left, right, _)) = wedge.filter(|w| near(w.4)) {
++            let (px, py) = (x - ax, y - ty);
++            let side = |(nx, ny): (f32, f32)| -(nx * px + ny * py);
++            inside = inside.max(side(left).min(side(right)));
++        }
++        let cover = (inside + 0.5).clamp(0., 1.);
++        if cover <= 0. {
++            *out = 0;
++            continue;
++        }
++        let px = match row.checked_sub(page_top).filter(|r| *r < page_rows) {
++            Some(r) => pixels[(r * width + col) as usize],
++            None => fill.unwrap_or([0; 4]),
++        };
++        let edge = (line + 0.5 - inside).clamp(0., 1.);
++        let mix = |c: u8, b: u8| f32::from(c) * (1. - edge) + f32::from(b) * edge;
++        let rgb = [
++            mix(px[0], border[0]),
++            mix(px[1], border[1]),
++            mix(px[2], border[2]),
++        ];
++        let channel = |c: f32| (c * cover).round() as u32;
++        *out = ((cover * 255.).round() as u32) << 24
++            | channel(rgb[0]) << 16
++            | channel(rgb[1]) << 8
++            | channel(rgb[2]);
++    }
++}
++
++/// The top and bottom of the X screen's work area (between GNOME's top
++/// bar and a bottom panel), logical pixels at `scale`, as `_NET_WORKAREA`
++/// gives it.
++fn work_area(scale: f64) -> Option<(f64, f64)> {
++    use x11rb::connection::Connection;
++    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
++    let (conn, screen) = x11rb::connect(None).ok()?;
++    let root = conn.setup().roots.get(screen)?.root;
++    let atom = conn
++        .intern_atom(true, b"_NET_WORKAREA")
++        .ok()?
++        .reply()
++        .ok()?
++        .atom;
++    let reply = conn
++        .get_property(false, root, atom, AtomEnum::CARDINAL, 0, 4)
++        .ok()?
++        .reply()
++        .ok()?;
++    let mut area = reply.value32()?.skip(1);
++    let (top, height) = (area.next()?, area.nth(1)?);
++    Some((f64::from(top) / scale, f64::from(top + height) / scale))
++}
++
++/// `attributes` placed at the tray's item: centred on `click` (logical
++/// pixels, the tray's), `width` wide, kept `GAP` inside the screen's sides.
++/// A click in the screen's top half hangs it below the top bar, with an
++/// arrow up to the item; one in its bottom half (a bottom panel) stands it
++/// above the panel, with an arrow down. `height` is the page's: the arrow
++/// adds to it. With no click (a tray that gives no point) it hangs `RISE`
++/// below the top bar at the primary screen's right, where the tray's items
++/// are, with no arrow.
++fn at_item(
++    events: &ActiveEventLoop,
++    attributes: WindowAttributes,
++    click: Option<(i32, i32)>,
++    width: f64,
++    height: f64,
++) -> (WindowAttributes, Option<Arrow>) {
++    let area = |monitor: winit::monitor::MonitorHandle| {
++        let scale = monitor.scale_factor();
++        let at = monitor.position().to_logical::<f64>(scale);
++        let size = monitor.size().to_logical::<f64>(scale);
++        (at.x, at.y, size.width, size.height, scale)
++    };
++    let screen = match click {
++        Some((x, y)) => {
++            let (x, y) = (f64::from(x), f64::from(y));
++            events
++                .available_monitors()
++                .map(area)
++                .find(|(sx, sy, sw, sh, _)| {
++                    (*sx..sx + sw).contains(&x) && (*sy..sy + sh).contains(&y)
++                })
++        }
++        None => events
++            .primary_monitor()
++            .or_else(|| events.available_monitors().next())
++            .map(area),
++    };
++    let Some((start, screen_top, across, tall, scale)) = screen else {
++        return (attributes, None);
++    };
++    let work = work_area(scale);
++    let Some((x, y)) = click.map(|(x, y)| (f64::from(x), f64::from(y))) else {
++        let top = work.map_or(screen_top + GAP, |(bar, _)| bar + RISE);
++        let left = start + across - width - GAP;
++        return (attributes.with_position(LogicalPosition::new(left, top)), None);
++    };
++    let left = (x - width / 2.)
++        .min(start + across - width - GAP)
++        .max(start + GAP);
++    let down = y > screen_top + tall / 2.;
++    let whole = height + ARROW_HEIGHT;
++    let top = if down {
++        // The arrow's tip above the bottom panel, or above the click.
++        let bottom = match work.filter(|(_, floor)| *floor < y) {
++            Some((_, floor)) => floor - TIP,
++            None => y - GAP,
++        };
++        bottom - whole
++    } else {
++        match work.filter(|(bar, _)| *bar > y) {
++            Some((bar, _)) => bar + TIP,
++            None => y + GAP,
++        }
++    };
++    // The tip at the item, kept clear of the window's rounded corners.
++    let margin = f64::from(RADIUS) + ARROW_BASE / 2.;
++    let tip = (x - left).clamp(margin.min(width / 2.), (width - margin).max(width / 2.));
++    let attributes = attributes.with_position(LogicalPosition::new(left, top));
++    (attributes, Some(Arrow { x: tip, down }))
++}
++
++/// The status button runs its own `press`: no popover hangs from it.
++fn item_presses(tray: &tray::Tray) -> bool {
++    tray.item.as_ref().is_none_or(|item| item.press)
++}
++
+ impl<D: DataSource + Default> Live<D> {
++    /// Make the window and show the page in it; a tray's window below
++    /// `click`, the screen point the tray says was clicked.
++    fn show(
++        &mut self,
++        events: &ActiveEventLoop,
++        dark: Option<bool>,
++        click: Option<(i32, i32)>,
++    ) -> Result<(), String> {
++        if self.view.is_some() {
++            return Ok(());
++        }
++        let size = self.presenter.host().runner().viewport();
++        let (mut width, mut height) = (size.width, size.height);
++        let item = self
++            .tray
++            .as_ref()
++            .and_then(|t| t.item.as_ref())
++            .map(|i| i.node);
++        // The tray's window is the popover: as large as its box (an
++        // unanchored popover is centred, so it then fills the window), with
++        // no title bar, as the Mac's popover has none.
++        if let Some((_, _, w, h)) = item.and_then(|node| self.presenter.status_popover_box(node)) {
++            (width, height) = (f64::from(w), f64::from(h));
++        }
++        let attributes = Window::default_attributes()
++            .with_title(self.title.caption(&self.app_name))
++            .with_theme(dark.map(theme));
++        let attributes = if self.x11 {
++            WindowAttributesExtX11::with_name(attributes, &self.id, &self.id)
++        } else {
++            WindowAttributesExtWayland::with_name(attributes, &self.id, "")
++        };
++        let attributes = match item {
++            Some(_) => attributes
++                .with_decorations(false)
++                .with_resizable(false)
++                .with_transparent(self.x11),
++            None => attributes,
++        };
++        let (attributes, arrow) = match self.x11 && item.is_some() {
++            true => at_item(events, attributes, click, width, height),
++            false => (attributes, None),
++        };
++        let tall = height + arrow.map_or(0., |_| ARROW_HEIGHT);
++        let attributes = attributes.with_inner_size(LogicalSize::new(width, tall));
++        let window = Rc::new(
++            events
++                .create_window(attributes)
++                .map_err(|error| error.to_string())?,
++        );
++        self.focused = false;
++        let context =
++            softbuffer::Context::new(window.clone()).map_err(|error| error.to_string())?;
++        let surface = softbuffer::Surface::new(&context, window.clone())
++            .map_err(|error| error.to_string())?;
++        window.request_redraw();
++        self.view = Some(View {
++            surface,
++            window,
++            // Unlike any real one: the first draw resizes the page to it.
++            extent: (0, 0, 0.),
++            arrow,
++        });
++        if self.tray.is_some() {
++            self.tell_page(false);
++            self.presenter.repaint();
++        }
++        Ok(())
++    }
++
++    /// Destroy the window; the page is put away, as a hidden one is.
++    fn hide(&mut self) {
++        if self.view.take().is_none() {
++            return;
++        }
++        self.input = input::Input::default();
++        self.caret = caret::Blink::default();
++        self.tell_page(true);
++    }
++
++    /// The window put away by the person: its popover closed, then the
++    /// window gone.
++    fn put_away(&mut self, now: f64) {
++        if let Some(node) = self
++            .tray
++            .as_ref()
++            .and_then(|t| t.item.as_ref())
++            .map(|i| i.node)
++        {
++            if self.presenter.status_popover_open(node) {
++                self.presenter.status_activate(node, now);
++            }
++        }
++        self.hide();
++    }
++
++    /// The tray item clicked.
++    fn clicked(
++        &mut self,
++        events: &ActiveEventLoop,
++        heard: &exact_painted::status_notifier::Heard,
++        now: f64,
++        dark: Option<bool>,
++    ) -> Result<(), String> {
++        let Some(does) = self.tray.as_ref().map(|t| t.does(heard)) else {
++            return Ok(());
++        };
++        warn(self.presenter.advance(now));
++        let now = self.presenter.host().now();
++        match does {
++            tray::Does::Press(node) => self.presenter.status_press(node, now),
++            tray::Does::Toggle(node) if self.view.is_some() => {
++                self.put_away(now);
++                let _ = node;
++            }
++            tray::Does::Toggle(node) => {
++                if !self.presenter.status_popover_open(node) {
++                    self.presenter.status_activate(node, now);
++                }
++                let at = click(heard);
++                self.last_click = at.or(self.last_click);
++                self.show(events, dark, at.or(self.last_click))?;
++                if let Some(view) = &self.view {
++                    view.window.focus_window();
++                }
++            }
++            tray::Does::Nothing => {}
++        }
++        Ok(())
++    }
++
++    /// The page's facts as the window has them: put away while it is gone,
++    /// brought back (`pageshow` with `persisted`) when it shows again.
++    fn tell_page(&mut self, hidden: bool) {
++        let p = &mut self.presenter;
++        let mut page = p.host().runner().page();
++        if page.hidden == hidden {
++            return;
++        }
++        page.hidden = hidden;
++        if hidden {
++            page.persisted = true;
++        } else if std::mem::take(&mut page.persisted) {
++            page.restores = page.restores.wrapping_add(1);
++        }
++        page.background = Some(false);
++        if let Some(error) = p.set_page(page) {
++            eprintln!("exact: page: {error}");
++        }
++        p.surface_lifecycle(hidden, hidden);
++    }
++
+     fn turn(&mut self, now: f64) {
+         self.input.finish_ime_events(&mut self.presenter);
+         let p = &mut self.presenter;
+@@ -309,24 +875,40 @@ impl<D: DataSource + Default> Live<D> {
+         p.poll_images();
+         p.poll_development(D::default);
+         if self.title.update(p.host().runner()) {
+-            self.window.set_title(self.title.caption(&self.app_name));
++            if let Some(view) = &self.view {
++                view.window.set_title(self.title.caption(&self.app_name));
++            }
+         }
+     }
+ 
+     fn draw(&mut self, started: Instant) -> Result<(), String> {
+         let now = started.elapsed().as_secs_f64() * 1000.0;
+-        let size = self.window.inner_size();
++        let Some(view) = &mut self.view else {
++            return Ok(());
++        };
++        let size = view.window.inner_size();
+         let (Some(width), Some(height)) =
+             (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+         else {
+             return Ok(());
+         };
+-        let scale = self.window.scale_factor() as f32;
++        let scale = view.window.scale_factor() as f32;
++        // The page fills the window but for the arrow's rows.
++        let arrow = view.arrow;
++        let rows = arrow.map_or(0, |_| arrow_rows(f64::from(scale)).min(size.height - 1));
++        let page_height = size.height - rows;
++        let page_top = match arrow {
++            Some(Arrow { down: false, .. }) => rows,
++            _ => 0,
++        };
++        self.input.page = arrow.map(|_| {
++            (page_top as f32 / scale, page_height as f32 / scale)
++        });
+         let extent = (size.width, size.height, scale);
+         let p = &mut self.presenter;
+-        if extent != self.extent {
+-            warn(p.resize_scaled(size.width as f32 / scale, size.height as f32 / scale, scale));
+-            self.extent = extent;
++        if extent != view.extent {
++            warn(p.resize_scaled(size.width as f32 / scale, page_height as f32 / scale, scale));
++            view.extent = extent;
+         }
+         if p.wants_frames() {
+             warn(p.follow_local_offset());
+@@ -337,26 +919,41 @@ impl<D: DataSource + Default> Live<D> {
+         }
+         let frame = p.display_frame().ok_or("a frame is already pending")?;
+         let pixels = frame.as_ref();
+-        if (pixels.width(), pixels.height()) != (size.width, size.height) {
++        if (pixels.width(), pixels.height()) != (size.width, page_height) {
+             return Err(format!(
+                 "painted frame is {}x{} for a {}x{} window",
+                 pixels.width(),
+                 pixels.height(),
+                 width,
+-                height,
++                page_height,
+             ));
+         }
+-        self.surface
++        view.surface
+             .resize(width, height)
+             .map_err(|error| error.to_string())?;
+-        let mut buffer = self
++        let mut buffer = view
+             .surface
+             .buffer_mut()
+             .map_err(|error| error.to_string())?;
+-        for (out, pixel) in buffer.iter_mut().zip(pixels.data().as_chunks::<4>().0) {
+-            *out = (u32::from(pixel[0]) << 16) | (u32::from(pixel[1]) << 8) | u32::from(pixel[2]);
++        if self.x11 && self.tray.is_some() {
++            let border = POPUP_BORDER[usize::from(p.dark())];
++            let arrow = arrow.map(|a| (a.x as f32 * scale, a.down));
++            popup_pixels(
++                &mut buffer,
++                pixels.data(),
++                (size.width, size.height),
++                page_top,
++                scale,
++                border,
++                arrow,
++            );
++        } else {
++            for (out, pixel) in buffer.iter_mut().zip(pixels.data().as_chunks::<4>().0) {
++                *out =
++                    (u32::from(pixel[0]) << 16) | (u32::from(pixel[1]) << 8) | u32::from(pixel[2]);
++            }
+         }
+-        self.window.pre_present_notify();
++        view.window.pre_present_notify();
+         buffer.present().map_err(|error| error.to_string())?;
+         p.display_complete(&frame);
+         warn(p.display_presented(&frame, started.elapsed().as_secs_f64() * 1000.0));
+@@ -375,3 +972,56 @@ fn warn(warning: Option<String>) {
+         eprintln!("exact: {warning}");
+     }
+ }
++
++#[cfg(test)]
++mod arrow_tests {
++    use super::popup_pixels;
++
++    /// The window's coverage as text: `#` covered, `+` partly, `.` clear.
++    fn draw(arrow: (f32, bool), page_top: u32) -> Vec<String> {
++        let (width, height) = (60u32, 30u32);
++        let rows = height - 9;
++        let rgba = vec![0xffu8; (width * rows * 4) as usize];
++        let mut out = vec![0u32; (width * height) as usize];
++        popup_pixels(&mut out, &rgba, (width, height), page_top, 1., [0, 0, 0], Some(arrow));
++        out.chunks(width as usize)
++            .map(|row| {
++                row.iter()
++                    .map(|px| match px >> 24 {
++                        0 => '.',
++                        255 => '#',
++                        _ => '+',
++                    })
++                    .collect()
++            })
++            .collect()
++    }
++
++    #[test]
++    fn the_arrow_points_from_the_page_to_the_item() {
++        let up = draw((40., false), 9);
++        eprintln!("{}", up.join("\n"));
++        // The tip at the item, nothing beside it; the corners stay round.
++        assert_eq!(&up[0][..38], &".".repeat(38));
++        assert_ne!(up[1].as_bytes()[40], b'.');
++        assert_eq!(up[1].as_bytes()[20], b'.');
++        assert_eq!(up[29].as_bytes()[0], b'.');
++        assert_eq!(up[9].as_bytes()[0], b'.');
++        let down = draw((20., true), 0);
++        eprintln!("{}", down.join("\n"));
++        assert_ne!(down[28].as_bytes()[20], b'.');
++        assert_eq!(down[28].as_bytes()[45], b'.');
++        assert_eq!(down[0].as_bytes()[0], b'.');
++    }
++
++    #[test]
++    fn no_border_runs_across_the_arrow_base() {
++        let (width, height) = (60u32, 30u32);
++        let rgba = vec![0xffu8; (width * 21 * 4) as usize];
++        let mut out = vec![0u32; (width * height) as usize];
++        popup_pixels(&mut out, &rgba, (width, height), 9, 1., [0, 0, 0], Some((40., false)));
++        // The page's first row under the tip is the page's white, not border.
++        assert_eq!(out[(9 * width + 40) as usize], 0xffff_ffff);
++        assert_ne!(out[(9 * width + 10) as usize] & 0xff, 0xff);
++    }
++}
+diff --git a/host/linux/src/window/input.rs b/host/linux/src/window/input.rs
+index 71d6fa862..4fd126707 100644
+--- a/host/linux/src/window/input.rs
++++ b/host/linux/src/window/input.rs
+@@ -19,6 +19,10 @@ pub(super) struct Input {
+     session: Option<Target>,
+     preedit: Preedit,
+     ime_area: Option<(f32, f32, f32, f32)>,
++    /// The page's place in the window, logical pixels: its top (below the
++    /// tray window's arrow) and its height, which the window's less the
++    /// arrow's. `None`: the page fills the window.
++    pub(super) page: Option<(f32, f32)>,
+ }
+ 
+ #[derive(Default, PartialEq, Eq)]
+@@ -62,14 +66,15 @@ impl Input {
+             }
+             WindowEvent::CursorMoved { position, .. } => {
+                 let position = position.to_logical::<f32>(window.scale_factor());
+-                let point = (position.x, position.y);
++                let top = self.page.map_or(0., |(top, _)| top);
++                let point = (position.x, position.y - top);
+                 if self.previous_click.is_some_and(|(_, origin, _)| {
+                     (point.0 - origin.0).abs() > 5. || (point.1 - origin.1).abs() > 5.
+                 }) {
+                     self.previous_click = None;
+                 }
+                 self.pointer = Some(point);
+-                if !pointer_mapped(presenter, window) {
++                if !pointer_mapped(presenter, window, self.page) {
+                     return Ok(());
+                 }
+                 presenter.set_pointer_kind(PointerKind::Mouse);
+@@ -107,7 +112,7 @@ impl Input {
+                 } else {
+                     self.buttons &= !bit;
+                 }
+-                if !pointer_mapped(presenter, window) {
++                if !pointer_mapped(presenter, window, self.page) {
+                     self.previous_click = None;
+                     presenter.pointer_lost(now_ms)?;
+                     return Ok(());
+@@ -126,7 +131,7 @@ impl Input {
+             }
+             WindowEvent::MouseWheel { delta, .. } => {
+                 self.previous_click = None;
+-                if !pointer_mapped(presenter, window) {
++                if !pointer_mapped(presenter, window, self.page) {
+                     return Ok(());
+                 }
+                 if let Some((x, y)) = self.pointer {
+@@ -199,8 +204,9 @@ impl Input {
+         if area != self.ime_area {
+             self.ime_area = area;
+             if let Some((x, y, width, height)) = area {
++                let top = self.page.map_or(0., |(top, _)| top);
+                 window.set_ime_cursor_area(
+-                    LogicalPosition::new(x, y),
++                    LogicalPosition::new(x, y + top),
+                     LogicalSize::new(width, height),
+                 );
+             }
+@@ -266,11 +272,16 @@ impl Input {
+     }
+ }
+ 
+-fn pointer_mapped<D: DataSource>(presenter: &Presenter<D>, window: &Window) -> bool {
++fn pointer_mapped<D: DataSource>(
++    presenter: &Presenter<D>,
++    window: &Window,
++    page: Option<(f32, f32)>,
++) -> bool {
+     let scale = window.scale_factor() as f32;
+     let size = window.inner_size();
++    let height = page.map_or(size.height as f32 / scale, |(_, height)| height);
+     presenter.display_input_mapping(
+-        (size.width as f32 / scale, size.height as f32 / scale),
++        (size.width as f32 / scale, height),
+         scale,
+     )
+ }
+diff --git a/host/linux/src/window/shortcuts.rs b/host/linux/src/window/shortcuts.rs
+new file mode 100644
+index 000000000..0dd0e8f2d
+--- /dev/null
++++ b/host/linux/src/window/shortcuts.rs
+@@ -0,0 +1,175 @@
++//! The desktop modules' host services on Linux (`exact_painted::desktop`):
++//! global shortcuts through the desktop portal
++//! (`exact_painted::global_shortcuts`); nothing else is built.
++//!
++//! - One binding per chord serves every reader of it, as on Windows; a
++//!   press raises each reader's event as an activation.
++//! - The chords read are bound together, in one portal session. When they
++//!   change, that session is closed and the new set bound in another: the
++//!   portal binds a session once.
++//! - A chord is the portal's id for its shortcut, so the desktop binds a
++//!   new chord as asked rather than keeping an earlier one's trigger.
++//! - The portal answers on a thread of its own; a press reaches the event
++//!   loop as a message, where [`Desktop::pressed`] raises it.
++//! - The portal says nothing of a chord another app holds: a chord that
++//!   parses is registered, and a session the portal refuses is logged.
++
++use exact_painted::desktop::{Login, Refusal, Services};
++use exact_painted::global_shortcuts::{self as portal, Bound, Shortcut};
++use std::cell::RefCell;
++use std::rc::Rc;
++use std::sync::Arc;
++
++struct Reader {
++    session: String,
++    id: String,
++    keys: String,
++    extension: &'static str,
++    event: &'static str,
++}
++
++/// The host's one table of global shortcuts.
++pub(super) struct Desktop {
++    name: String,
++    readers: RefCell<Vec<Reader>>,
++    /// The chords bound, and their session.
++    bound: RefCell<Option<(Vec<String>, Bound)>>,
++    /// Hands a pressed chord to the event loop.
++    send: Arc<dyn Fn(String) + Send + Sync>,
++}
++
++impl Desktop {
++    /// The services for every session from now on; `send` hands a pressed
++    /// chord to the loop, which calls [`Desktop::pressed`] with it.
++    pub(super) fn install(name: &str, send: impl Fn(String) + Send + Sync + 'static) -> Rc<Desktop> {
++        let desktop = Rc::new(Desktop {
++            name: name.to_owned(),
++            readers: RefCell::default(),
++            bound: RefCell::default(),
++            send: Arc::new(send),
++        });
++        exact_painted::desktop::install(desktop.clone());
++        desktop
++    }
++
++    /// `keys` was pressed: each reader of it hears it.
++    pub(super) fn pressed(&self, keys: &str) {
++        for r in self.readers.borrow().iter().filter(|r| r.keys == keys) {
++            let event = exact_painted::package::json!({ "id": r.id, "keys": r.keys });
++            let args = exact_painted::package::json!([r.id, event]).to_string();
++            exact_painted::desktop::activate(r.extension, r.event, args);
++        }
++    }
++
++    /// Bind the chords read now, unless they are bound already.
++    fn rebind(&self) {
++        let readers = self.readers.borrow();
++        let mut chords: Vec<String> = readers.iter().map(|r| r.keys.clone()).collect();
++        chords.sort();
++        chords.dedup();
++        if self.bound.borrow().as_ref().is_some_and(|(bound, _)| *bound == chords) {
++            return;
++        }
++        // The old session ends first, so its chords are free to bind again.
++        self.bound.borrow_mut().take();
++        if chords.is_empty() {
++            return;
++        }
++        let Some(address) = std::env::var("DBUS_SESSION_BUS_ADDRESS")
++            .ok()
++            .filter(|a| !a.is_empty())
++        else {
++            eprintln!("exact: global shortcuts: there is no session bus");
++            return;
++        };
++        let shortcuts = chords
++            .iter()
++            .filter_map(|keys| {
++                let mut ids: Vec<&str> = readers
++                    .iter()
++                    .filter(|r| r.keys == *keys)
++                    .map(|r| r.id.as_str())
++                    .collect();
++                ids.dedup();
++                Some(Shortcut {
++                    id: keys.clone(),
++                    description: format!("{}: {}", self.name, ids.join(", ")),
++                    trigger: portal::trigger(keys).ok()?,
++                })
++            })
++            .collect();
++        let send = self.send.clone();
++        match portal::bind(
++            &address,
++            shortcuts,
++            move |keys| send(keys.to_owned()),
++            |error| eprintln!("exact: global shortcuts: {error}"),
++        ) {
++            Ok(bound) => *self.bound.borrow_mut() = Some((chords, bound)),
++            Err(error) => eprintln!("exact: global shortcuts: the session bus: {error}"),
++        }
++    }
++}
++
++impl Services for Desktop {
++    fn register_hotkey(
++        &self,
++        session: &str,
++        id: &str,
++        keys: &str,
++        _repeat: bool,
++        extension: &'static str,
++        event: &'static str,
++    ) -> Result<(), Refusal> {
++        portal::trigger(keys)?;
++        {
++            let mut readers = self.readers.borrow_mut();
++            let same = |r: &Reader| r.session == session && r.id == id && r.keys == keys;
++            if !readers.iter().any(same) {
++                readers.push(Reader {
++                    session: session.to_owned(),
++                    id: id.to_owned(),
++                    keys: keys.to_owned(),
++                    extension,
++                    event,
++                });
++            }
++        }
++        self.rebind();
++        Ok(())
++    }
++
++    fn unregister_hotkey(&self, session: &str, id: &str, keys: &str) {
++        self.readers
++            .borrow_mut()
++            .retain(|r| !(r.session == session && r.id == id && r.keys == keys));
++        self.rebind();
++    }
++
++    fn check_hotkey(&self, keys: &str) -> Result<(), Refusal> {
++        portal::trigger(keys).map(drop)
++    }
++
++    fn attention(&self, _critical: bool, _count: Option<u32>) -> Result<(), String> {
++        Err("attention is not built on Linux".into())
++    }
++
++    fn login(&self) -> Login {
++        Login {
++            state: "unknown",
++            hidden: false,
++        }
++    }
++
++    fn set_login(&self, _register: Option<bool>) -> Result<Login, String> {
++        Err("the login item is not built on Linux".into())
++    }
++
++    fn open_login_settings(&self) -> Result<(), String> {
++        Err("the login item is not built on Linux".into())
++    }
++
++    fn login_launch(&self) -> Option<bool> {
++        None
++    }
++}
+diff --git a/host/linux/src/window/tray.rs b/host/linux/src/window/tray.rs
+new file mode 100644
+index 000000000..36c103ddf
+--- /dev/null
++++ b/host/linux/src/window/tray.rs
+@@ -0,0 +1,143 @@
++//! The status item in the desktop's tray (LLP 1133.025 D4 on Linux): the
++//! first `-exact-menu="status"` button becomes a `StatusNotifierItem`
++//! (`exact_painted::status_notifier`), and leaves the page, as the Mac's
++//! `NSStatusItem` and Windows' notification icon do.
++//!
++//! - **The icon** is the button's image (`Presenter::status_icon`) drawn
++//!   for a dark panel (GNOME's and Ubuntu's top bar) at 22 and 44 pixels;
++//!   the tooltip is its label. A button with no image shows a plain dot.
++//! - **A click** runs the button's `press` when it has one. Otherwise the
++//!   window stands in for the button's `popovertarget` popover, as the
++//!   Mac's `NSPopover` hangs from its item: a click shows the window with
++//!   the popover open, and another hides both. Closing the window, or the
++//!   popover closing, hides it; the app runs on in the tray.
++//! - **No tray** (no session bus, or GNOME without the AppIndicator
++//!   extension): the button stays an ordinary button in the window.
++use super::Event;
++use exact_kernel::ViewId;
++use exact_painted::presenter::top::StatusItem;
++use exact_painted::presenter::Presenter;
++use exact_painted::status_notifier::{argb, Heard, Pixmap, StatusNotifier};
++use exact_runner::DataSource;
++
++/// The icon's sizes, pixels: the panel's 22-point icon at 1× and 2×.
++const SIDES: [u32; 2] = [22, 44];
++
++pub(super) struct Tray {
++    notifier: StatusNotifier,
++    /// The status button as the tree last stood.
++    pub item: Option<StatusItem>,
++    /// What the icon was drawn from: the tree's epoch and the images'.
++    drawn: Option<(u64, Vec<(ViewId, usize)>)>,
++}
++
++/// What a click on the item asks of the host.
++pub(super) enum Does {
++    /// Run the button's `press`.
++    Press(ViewId),
++    /// Show or hide the window with the button's popover.
++    Toggle(ViewId),
++    Nothing,
++}
++
++impl Tray {
++    /// The tray item for `p`'s status button, if it has one and the desktop
++    /// has a tray; each click is handed to `send`, from the item's thread.
++    pub fn start<D: DataSource>(
++        p: &mut Presenter<D>,
++        id: &str,
++        title: &str,
++        send: impl Fn(Event) + Send + Sync + 'static,
++    ) -> Option<Tray> {
++        let item = p.status_items().into_iter().next()?;
++        let notifier = StatusNotifier::start(id, title, move |heard| send(Event::Tray(heard)));
++        match notifier {
++            Ok(notifier) => {
++                p.place_status_items();
++                Some(Tray {
++                    notifier,
++                    item: Some(item),
++                    drawn: None,
++                })
++            }
++            Err(error) => {
++                eprintln!("exact: tray: {error}; the status item stays in the window");
++                None
++            }
++        }
++    }
++
++    /// The icon and tooltip as the tree now stands.
++    pub fn sync<D: DataSource>(&mut self, p: &mut Presenter<D>) {
++        let item = p.status_items().into_iter().next();
++        let images: Vec<_> = item
++            .iter()
++            .filter_map(|item| item.image.map(|id| (id, SIDES[1])))
++            .collect();
++        let revision = p.sync_status_images(&images);
++        let stamp = (p.host().kernel().epoch(), revision);
++        let changed = self.drawn.as_ref() != Some(&stamp);
++        self.item = item;
++        if !changed {
++            return;
++        }
++        self.drawn = Some(stamp);
++        let Some(item) = &self.item else { return };
++        let opacity = if item.disabled { 0.36 } else { 1. };
++        let mut icons = Vec::new();
++        for side in SIDES {
++            let scale = side as f32 / SIDES[0] as f32;
++            let drawn = item
++                .image
++                .and_then(|image| p.status_icon(image, side, scale, true));
++            let rgba = match drawn {
++                Some(Ok(pixmap)) => pixmap.data().to_vec(),
++                Some(Err(error)) => {
++                    eprintln!("exact: tray: the status item's image did not draw: {error}");
++                    dot(side)
++                }
++                // Still loading, or no image: a dot until it draws.
++                None => dot(side),
++            };
++            icons.push(Pixmap {
++                width: side as i32,
++                height: side as i32,
++                argb: argb(&rgba, opacity),
++            });
++        }
++        self.notifier.set_icon(icons);
++        self.notifier.set_tooltip(&item.label);
++    }
++
++    /// What `heard` asks for.
++    pub fn does(&self, heard: &Heard) -> Does {
++        let Some(item) = self.item.as_ref().filter(|item| !item.disabled) else {
++            return Does::Nothing;
++        };
++        match heard {
++            Heard::Activate(..) | Heard::SecondaryActivate(..) | Heard::ContextMenu(..) => {
++                if item.press {
++                    Does::Press(item.node)
++                } else {
++                    Does::Toggle(item.node)
++                }
++            }
++            Heard::Scroll(..) => Does::Nothing,
++        }
++    }
++}
++
++/// A white dot, premultiplied RGBA, `side` pixels square.
++fn dot(side: u32) -> Vec<u8> {
++    let r = side as f32 * 0.3;
++    let c = side as f32 / 2.;
++    let mut out = Vec::with_capacity((side * side * 4) as usize);
++    for y in 0..side {
++        for x in 0..side {
++            let d = ((x as f32 + 0.5 - c).powi(2) + (y as f32 + 0.5 - c).powi(2)).sqrt();
++            let a = ((r - d + 0.5).clamp(0., 1.) * 255.).round() as u8;
++            out.extend([a, a, a, a]);
++        }
++    }
++    out
++}
+diff --git a/host/painted/src/app.rs b/host/painted/src/app.rs
+index 29c10a8a3..a528d6d73 100644
+--- a/host/painted/src/app.rs
++++ b/host/painted/src/app.rs
+@@ -720,7 +720,9 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
+         booted.0.set_updates(updates);
+         booted.0.set_hatches(hatches);
+         booted.0.serve_packages(packages.clone());
+-        #[cfg(windows)]
++        // Linux paints them over the page as Windows does: it has no
++        // separate surface windows of its own.
++        #[cfg(any(windows, target_os = "linux"))]
+         booted.0.serve_overlays();
+         #[cfg(windows)]
+         booted.0.refresh_scrollbar_preferences();
+diff --git a/host/painted/src/desktop.rs b/host/painted/src/desktop.rs
+index 6fce4e560..e3d7826d4 100644
+--- a/host/painted/src/desktop.rs
++++ b/host/painted/src/desktop.rs
+@@ -91,6 +91,15 @@ pub fn watch_window_settings(
+     crate::portal::watch_settings(&address, |s| s, changed)
+ }
+ 
++/// The desktop's interface font's family (GNOME's `font-name` through the
++/// settings portal), what a native app's text is set in; `None` without a
++/// session bus or a portal that says.
++#[cfg(target_os = "linux")]
++pub fn interface_font_family() -> Option<String> {
++    let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok()?;
++    crate::portal::interface_font(&address)
++}
++
+ /// Why a chord is not registered, in `@exact/global-shortcuts`' words.
+ pub type Refusal = &'static str;
+ 
+diff --git a/host/painted/src/lib.rs b/host/painted/src/lib.rs
+index 48615bf99..1b9c6b511 100644
+--- a/host/painted/src/lib.rs
++++ b/host/painted/src/lib.rs
+@@ -89,6 +89,16 @@ mod placement;
+ // The Linux desktop portal; Windows uses its window's common item dialogs.
+ #[cfg_attr(any(not(unix), target_os = "android"), allow(dead_code))]
+ mod portal;
++/// The Linux desktop's tray: a status item served over the session bus.
++#[cfg(target_os = "linux")]
++pub mod status_notifier {
++    pub use crate::portal::tray::{argb, Heard, Pixmap, StatusNotifier};
++}
++/// The Linux desktop's global shortcuts, through its portal.
++#[cfg(target_os = "linux")]
++pub mod global_shortcuts {
++    pub use crate::portal::shortcuts::{bind, trigger, Bound, Shortcut};
++}
+ pub mod presence_secrets;
+ pub mod presenter;
+ pub mod raster;
+diff --git a/host/painted/src/portal.rs b/host/painted/src/portal.rs
+index f78350626..95147c24f 100644
+--- a/host/painted/src/portal.rs
++++ b/host/painted/src/portal.rs
+@@ -19,7 +19,7 @@ use exact_runner::file_pickers::Picker;
+ use std::path::PathBuf;
+ 
+ #[cfg(target_os = "linux")]
+-pub(crate) use bus::watch_settings;
++pub(crate) use bus::{interface_font, watch_settings};
+ 
+ #[cfg(unix)]
+ pub(crate) mod wire;
+@@ -314,6 +314,10 @@ pub(crate) fn socket_of(address: &str) -> Option<Socket> {
+ mod bus;
+ #[cfg(unix)]
+ pub(crate) use bus::choose;
++#[cfg(target_os = "linux")]
++pub(crate) use bus::tray;
++#[cfg(target_os = "linux")]
++pub(crate) use bus::shortcuts;
+ 
+ #[cfg(all(test, unix))]
+ #[path = "portal_tests.rs"]
+diff --git a/host/painted/src/portal/bus.rs b/host/painted/src/portal/bus.rs
+index e0aaa70ff..d989fc97b 100644
+--- a/host/painted/src/portal/bus.rs
++++ b/host/painted/src/portal/bus.rs
+@@ -17,7 +17,11 @@ const DBUS_PATH: &str = "/org/freedesktop/DBus";
+ #[cfg(target_os = "linux")]
+ mod settings;
+ #[cfg(target_os = "linux")]
+-pub(crate) use settings::watch_settings;
++pub(crate) use settings::{interface_font, watch_settings};
++#[cfg(target_os = "linux")]
++pub(crate) mod tray;
++#[cfg(target_os = "linux")]
++pub(crate) mod shortcuts;
+ 
+ /// A connection to a message bus, authenticated and named.
+ pub(crate) struct Bus {
+diff --git a/host/painted/src/portal/bus/settings.rs b/host/painted/src/portal/bus/settings.rs
+index 89764a311..f0d0f575f 100644
+--- a/host/painted/src/portal/bus/settings.rs
++++ b/host/painted/src/portal/bus/settings.rs
+@@ -83,6 +83,65 @@ fn read(bus: &mut Bus) -> WindowSettings {
+     settings
+ }
+ 
++/// The desktop's interface font's family (GNOME's `font-name`, a Pango
++/// description such as "Ubuntu Sans 11"), read once through the settings
++/// portal; `None` without one.
++pub(crate) fn interface_font(address: &str) -> Option<String> {
++    let mut bus = Bus::connect(address, Duration::from_millis(500)).ok()?;
++    let args = [Value::str(GNOME), Value::str("font-name")];
++    let reply = match bus.call(PORTAL, PORTAL_PATH, INTERFACE, "ReadOne", &args) {
++        Err(error) if error.starts_with("org.freedesktop.DBus.Error.UnknownMethod") => {
++            bus.call(PORTAL, PORTAL_PATH, INTERFACE, "Read", &args)
++        }
++        other => other,
++    }
++    .ok()?;
++    let mut value = reply.first()?;
++    while let Value::Variant(inner) = value {
++        value = inner;
++    }
++    match value {
++        Value::Str(description) => font_family(description),
++        _ => None,
++    }
++}
++
++/// A Pango font description's family: without its size and its style words.
++fn font_family(description: &str) -> Option<String> {
++    const STYLES: [&str; 14] = [
++        "Thin",
++        "Light",
++        "Regular",
++        "Book",
++        "Medium",
++        "Semi-Bold",
++        "SemiBold",
++        "Bold",
++        "Heavy",
++        "Italic",
++        "Oblique",
++        "Condensed",
++        "Expanded",
++        "Normal",
++    ];
++    let mut words: Vec<&str> = description
++        .trim()
++        .trim_end_matches(',')
++        .split_whitespace()
++        .collect();
++    if words
++        .last()
++        .is_some_and(|w| w.trim_end_matches("px").parse::<f32>().is_ok())
++    {
++        words.pop();
++    }
++    while words.len() > 1 && words.last().is_some_and(|w| STYLES.contains(w)) {
++        words.pop();
++    }
++    let family = words.join(" ");
++    (!family.is_empty()).then_some(family)
++}
++
+ pub(crate) fn watch_settings<T: Copy + Default + PartialEq + Send + 'static>(
+     address: &str,
+     select: fn(WindowSettings) -> T,
+@@ -127,3 +186,22 @@ pub(crate) fn watch_settings<T: Copy + Default + PartialEq + Send + 'static>(
+     let initial = receive.recv_timeout(STARTUP).unwrap_or_default();
+     Some(SettingsWatch { initial, socket })
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::font_family;
++
++    #[test]
++    fn a_pango_description_names_its_family() {
++        assert_eq!(
++            font_family("Ubuntu Sans 11").as_deref(),
++            Some("Ubuntu Sans")
++        );
++        assert_eq!(
++            font_family("Cantarell Bold 11").as_deref(),
++            Some("Cantarell")
++        );
++        assert_eq!(font_family("Noto Sans").as_deref(), Some("Noto Sans"));
++        assert_eq!(font_family("  "), None);
++    }
++}
+diff --git a/host/painted/src/portal/bus/shortcuts.rs b/host/painted/src/portal/bus/shortcuts.rs
+new file mode 100644
+index 000000000..50942b4b7
+--- /dev/null
++++ b/host/painted/src/portal/bus/shortcuts.rs
+@@ -0,0 +1,242 @@
++//! Global shortcuts through the desktop portal
++//! ([`org.freedesktop.portal.GlobalShortcuts`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html)):
++//! a session of the app's chords, bound once, whose `Activated` signals are
++//! the presses.
++//!
++//! - A session binds once: the portal refuses a second `BindShortcuts` on
++//!   it, so another set of chords is another session, on a connection of
++//!   its own. Dropping [`Bound`] closes that connection, and the portal
++//!   ends the session with it.
++//! - The desktop keeps the trigger it first bound for a shortcut's id, and
++//!   ignores a later `preferred_trigger` for that id; the caller names each
++//!   shortcut by its chord, so a new chord is a new shortcut.
++//! - The first binding may ask the person (GNOME's dialog), so the thread
++//!   waits on each answer without limit.
++
++use super::{Bus, Value, PORTAL, PORTAL_PATH};
++use std::os::unix::net::UnixStream;
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::time::Duration;
++
++const INTERFACE: &str = "org.freedesktop.portal.GlobalShortcuts";
++
++/// One shortcut to bind: the portal's id for it, what the desktop's
++/// settings call it, and the chord in the shortcuts specification's words
++/// (see [`trigger`]).
++pub struct Shortcut {
++    /// The portal's id for it, which an `Activated` signal names.
++    pub id: String,
++    /// What the desktop's settings call it.
++    pub description: String,
++    /// The chord asked for (`CTRL+ALT+LOGO+s`).
++    pub trigger: String,
++}
++
++/// A bound session, held while it lives.
++pub struct Bound {
++    socket: UnixStream,
++}
++
++impl Drop for Bound {
++    fn drop(&mut self) {
++        let _ = self.socket.shutdown(std::net::Shutdown::Both);
++    }
++}
++
++static TOKENS: AtomicU64 = AtomicU64::new(0);
++
++fn token() -> String {
++    format!(
++        "exact{}_{}",
++        std::process::id(),
++        TOKENS.fetch_add(1, Ordering::Relaxed)
++    )
++}
++
++/// Bind `shortcuts` in a session of their own on the bus at `address`.
++/// `pressed` is called, from the session's thread, with a shortcut's id
++/// at each press; `failed`, once, with why the session ended or bound
++/// nothing.
++pub fn bind(
++    address: &str,
++    shortcuts: Vec<Shortcut>,
++    pressed: impl Fn(&str) + Send + 'static,
++    failed: impl Fn(String) + Send + 'static,
++) -> Result<Bound, String> {
++    let mut bus = Bus::connect(address, Duration::from_secs(5))?;
++    let socket = bus.stream.try_clone().map_err(|e| e.to_string())?;
++    std::thread::Builder::new()
++        .name("exact-global-shortcuts".into())
++        .spawn(move || {
++            if let Err(error) = serve(&mut bus, &shortcuts, &pressed) {
++                failed(error);
++            }
++        })
++        .map_err(|e| e.to_string())?;
++    Ok(Bound { socket })
++}
++
++/// Ask the portal for `member` as a request (`org.freedesktop.portal.Request`)
++/// and wait for its `Response`: its results, or why there were none.
++fn request(
++    bus: &mut Bus,
++    member: &str,
++    token: &str,
++    body: &[Value],
++) -> Result<Value, String> {
++    let expected = crate::portal::request_path(&bus.unique, token);
++    let response = |path: &str| {
++        format!("type='signal',sender='{PORTAL}',interface='org.freedesktop.portal.Request',member='Response',path='{path}'")
++    };
++    bus.subscribe(&response(&expected))?;
++    let reply = bus.call(PORTAL, PORTAL_PATH, INTERFACE, member, body)?;
++    let handle = match reply.as_slice() {
++        [Value::Path(handle)] => handle.clone(),
++        _ => return Err(format!("the portal's {member} gave no request")),
++    };
++    if handle != expected {
++        bus.subscribe(&response(&handle))?;
++    }
++    loop {
++        let m = bus.signal()?;
++        if m.member != "Response" || m.path != handle {
++            continue;
++        }
++        return match m.body.as_slice() {
++            [Value::U32(0), results] => Ok(results.clone()),
++            [Value::U32(1), _] => Err(format!("{member} was cancelled")),
++            _ => Err(format!("the portal refused {member}")),
++        };
++    }
++}
++
++fn serve(bus: &mut Bus, shortcuts: &[Shortcut], pressed: &dyn Fn(&str)) -> Result<(), String> {
++    bus.wait_forever();
++    bus.subscribe(&format!(
++        "type='signal',sender='{PORTAL}',interface='{INTERFACE}',member='Activated'"
++    ))?;
++    let (ask, name) = (token(), token());
++    let options = Value::dict(vec![
++        ("handle_token", Value::str(&ask)),
++        ("session_handle_token", Value::str(&name)),
++    ]);
++    let created = request(bus, "CreateSession", &ask, &[options])?;
++    let session = match created.get("session_handle") {
++        Some(Value::Str(path) | Value::Path(path)) => path.clone(),
++        _ => return Err("the portal made no session".into()),
++    };
++    let list = shortcuts
++        .iter()
++        .map(|s| {
++            Value::Struct(vec![
++                Value::str(&s.id),
++                Value::dict(vec![
++                    ("description", Value::str(&s.description)),
++                    ("preferred_trigger", Value::str(&s.trigger)),
++                ]),
++            ])
++        })
++        .collect();
++    let ask = token();
++    request(
++        bus,
++        "BindShortcuts",
++        &ask,
++        &[
++            Value::Path(session.clone()),
++            Value::Array("(sa{sv})".into(), list),
++            Value::str(""),
++            Value::dict(vec![("handle_token", Value::str(&ask))]),
++        ],
++    )?;
++    loop {
++        let m = bus.signal()?;
++        if m.member != "Activated" {
++            continue;
++        }
++        if let [Value::Path(at) | Value::Str(at), Value::Str(id), ..] = m.body.as_slice() {
++            if *at == session {
++                pressed(id);
++            }
++        }
++    }
++}
++
++/// An `aria-keyshortcuts` chord (`Control+Alt+Meta+S`) in the shortcuts
++/// specification's words (`CTRL+ALT+LOGO+s`: its modifiers, then an XKB
++/// key name), or why it is none: `invalid`, or `not-allowed` for a pair of
++/// the same modifier.
++pub fn trigger(keys: &str) -> Result<String, &'static str> {
++    const MODIFIERS: [(&str, &str); 4] = [
++        ("Control", "CTRL"),
++        ("Alt", "ALT"),
++        ("Shift", "SHIFT"),
++        ("Meta", "LOGO"),
++    ];
++    let parts: Vec<&str> = keys.split('+').collect();
++    let (key, modifiers) = parts.split_last().ok_or("invalid")?;
++    if let [a, b] = parts[..] {
++        if a == b && MODIFIERS.iter().any(|(m, _)| *m == a) {
++            return Err("not-allowed");
++        }
++    }
++    let mut out = String::new();
++    for m in modifiers {
++        let (_, name) = MODIFIERS.iter().find(|(n, _)| n == m).ok_or("invalid")?;
++        out.push_str(name);
++        out.push('+');
++    }
++    out.push_str(&key_name(key).ok_or("invalid")?);
++    Ok(out)
++}
++
++/// A key's XKB name.
++fn key_name(key: &str) -> Option<String> {
++    let mut chars = key.chars();
++    if let (Some(c), None) = (chars.next(), chars.next()) {
++        return c
++            .is_ascii_alphanumeric()
++            .then(|| c.to_ascii_lowercase().to_string());
++    }
++    if let Some(n) = key.strip_prefix('F').and_then(|n| n.parse::<u32>().ok()) {
++        return (1..=24).contains(&n).then(|| format!("F{n}"));
++    }
++    Some(
++        match key {
++            "Space" | " " => "space",
++            "Enter" => "Return",
++            "Escape" => "Escape",
++            "Tab" => "Tab",
++            "Backspace" => "BackSpace",
++            "Delete" => "Delete",
++            "Insert" => "Insert",
++            "Home" => "Home",
++            "End" => "End",
++            "PageUp" => "Page_Up",
++            "PageDown" => "Page_Down",
++            "ArrowLeft" => "Left",
++            "ArrowUp" => "Up",
++            "ArrowRight" => "Right",
++            "ArrowDown" => "Down",
++            "PrintScreen" => "Print",
++            _ => return None,
++        }
++        .to_owned(),
++    )
++}
++
++#[cfg(test)]
++mod tests {
++    use super::trigger;
++
++    #[test]
++    fn a_chord_is_named_as_the_shortcuts_specification_names_it() {
++        assert_eq!(trigger("Control+Alt+Meta+S").as_deref(), Ok("CTRL+ALT+LOGO+s"));
++        assert_eq!(trigger("Alt+Meta+ArrowUp").as_deref(), Ok("ALT+LOGO+Up"));
++        assert_eq!(trigger("Shift+F12").as_deref(), Ok("SHIFT+F12"));
++        assert_eq!(trigger("PrintScreen").as_deref(), Ok("Print"));
++        assert_eq!(trigger("Meta+Meta"), Err("not-allowed"));
++        assert_eq!(trigger("Hyper+K"), Err("invalid"));
++        assert_eq!(trigger("Control+Shift"), Err("invalid"));
++    }
++}
+diff --git a/host/painted/src/portal/bus/tray.rs b/host/painted/src/portal/bus/tray.rs
+new file mode 100644
+index 000000000..c5ab632e6
+--- /dev/null
++++ b/host/painted/src/portal/bus/tray.rs
+@@ -0,0 +1,466 @@
++//! A status item in the Linux desktop's tray: a `StatusNotifierItem` served
++//! on the session bus and registered with the desktop's
++//! `StatusNotifierWatcher` (KDE Plasma; GNOME with the AppIndicator
++//! extension, which Ubuntu enables), as the
++//! [StatusNotifierItem specification](https://www.freedesktop.org/wiki/Specifications/StatusNotifierItem/StatusNotifierItem/)
++//! describes it.
++//!
++//! - **The icon** is drawn by its host and handed over as pixels
++//!   (`IconPixmap`: ARGB32 in network byte order); the tooltip is the
++//!   item's label. A change is announced with `NewIcon` and `NewToolTip`,
++//!   and the tray reads the properties again.
++//! - **The clicks**: `Activate` (a primary click), `SecondaryActivate` (a
++//!   middle click) and `ContextMenu` (a right click; the item exports no
++//!   `com.canonical.dbusmenu` menu) reach the host as [`Heard`] on the
++//!   item's own thread.
++//! - **The watcher restarting** (the shell reloaded) names a new owner of
++//!   `org.kde.StatusNotifierWatcher`; the item registers again with it.
++//!
++//! One thread reads the connection and answers each call; the host's
++//! changes write signals from its own thread through the shared writer.
++
++use super::{Bus, DBUS, DBUS_PATH};
++use crate::portal::wire::{self, Message, Value};
++use std::io::Write;
++use std::os::unix::net::UnixStream;
++use std::sync::{Arc, Mutex};
++use std::time::Duration;
++
++const WATCHER: &str = "org.kde.StatusNotifierWatcher";
++const WATCHER_PATH: &str = "/StatusNotifierWatcher";
++const ITEM: &str = "org.kde.StatusNotifierItem";
++const ITEM_PATH: &str = "/StatusNotifierItem";
++const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
++const INTROSPECTABLE: &str = "org.freedesktop.DBus.Introspectable";
++const PEER: &str = "org.freedesktop.DBus.Peer";
++
++/// What the tray said of the item. Coordinates are the screen's, as the
++/// tray gives them (often zero under Wayland).
++#[derive(Debug, Clone, PartialEq)]
++pub enum Heard {
++    /// A primary click.
++    Activate(i32, i32),
++    /// A middle click.
++    SecondaryActivate(i32, i32),
++    /// A right click, asking for the item's menu.
++    ContextMenu(i32, i32),
++    /// A scroll over the item: its delta and `"vertical"` or `"horizontal"`.
++    Scroll(i32, String),
++}
++
++/// One picture of the icon: `width` × `height` pixels, ARGB32 in network
++/// byte order ([`argb`]).
++#[derive(Debug, Clone, PartialEq)]
++pub struct Pixmap {
++    /// Pixels across.
++    pub width: i32,
++    /// Pixels down.
++    pub height: i32,
++    /// A, R, G, B bytes per pixel, row by row.
++    pub argb: Vec<u8>,
++}
++
++/// Premultiplied RGBA (a tiny-skia pixmap's data) as straight ARGB32 in
++/// network byte order, its alpha scaled by `opacity` (`1.0`: as drawn).
++pub fn argb(rgba: &[u8], opacity: f32) -> Vec<u8> {
++    let mut out = Vec::with_capacity(rgba.len());
++    for px in rgba.as_chunks::<4>().0 {
++        let a = u32::from(px[3]);
++        let straight = |c: u8| match a {
++            0 => 0,
++            _ => ((u32::from(c) * 255 + a / 2) / a).min(255) as u8,
++        };
++        let alpha = (a as f32 * opacity.clamp(0., 1.)).round() as u8;
++        out.extend([alpha, straight(px[0]), straight(px[1]), straight(px[2])]);
++    }
++    out
++}
++
++/// What the item shows, as its properties answer.
++struct Shown {
++    id: String,
++    title: String,
++    tooltip: String,
++    icons: Vec<Pixmap>,
++}
++
++/// The connection's writing half, and what the item shows.
++struct Shared {
++    out: UnixStream,
++    serial: u32,
++    shown: Shown,
++}
++
++impl Shared {
++    fn next(&mut self) -> u32 {
++        self.serial = self.serial.wrapping_add(1).max(1);
++        self.serial
++    }
++
++    fn send(&mut self, bytes: &[u8]) {
++        // A write that fails means the bus is gone; the reader ends too.
++        let _ = self.out.write_all(bytes);
++    }
++
++    fn signal(&mut self, member: &str) {
++        let serial = self.next();
++        let m = wire::message(wire::SIGNAL, serial, None, "", ITEM_PATH, ITEM, member, &[]);
++        self.send(&m);
++    }
++
++    fn register(&mut self, name: &str) {
++        let serial = self.next();
++        let m = wire::message(
++            wire::METHOD_CALL,
++            serial,
++            None,
++            WATCHER,
++            WATCHER_PATH,
++            WATCHER,
++            "RegisterStatusNotifierItem",
++            &[Value::str(name)],
++        );
++        self.send(&m);
++    }
++
++    fn reply(&mut self, to: &Message, body: &[Value]) {
++        let serial = self.next();
++        let m = wire::message(
++            wire::METHOD_RETURN,
++            serial,
++            Some(to.serial),
++            &to.sender,
++            "",
++            "",
++            "",
++            body,
++        );
++        self.send(&m);
++    }
++
++    fn refuse(&mut self, to: &Message, name: &str, text: &str) {
++        let serial = self.next();
++        let m = wire::error(serial, to.serial, &to.sender, name, text);
++        self.send(&m);
++    }
++}
++
++fn pixmaps(icons: &[Pixmap]) -> Value {
++    let icons = icons
++        .iter()
++        .map(|p| {
++            Value::Struct(vec![
++                Value::I32(p.width),
++                Value::I32(p.height),
++                Value::Array("y".into(), p.argb.iter().map(|b| Value::Byte(*b)).collect()),
++            ])
++        })
++        .collect();
++    Value::Array("(iiay)".into(), icons)
++}
++
++fn none() -> Value {
++    Value::Array("(iiay)".into(), Vec::new())
++}
++
++/// The item's properties, by name.
++fn property(shown: &Shown, name: &str) -> Option<Value> {
++    Some(match name {
++        "Category" => Value::str("ApplicationStatus"),
++        "Id" => Value::str(&shown.id),
++        "Title" => Value::str(&shown.title),
++        "Status" => Value::str("Active"),
++        "WindowId" => Value::I32(0),
++        "IconThemePath" | "IconName" | "OverlayIconName" | "AttentionIconName"
++        | "AttentionMovieName" => Value::str(""),
++        "IconPixmap" => pixmaps(&shown.icons),
++        "OverlayIconPixmap" | "AttentionIconPixmap" => none(),
++        "ToolTip" => Value::Struct(vec![
++            Value::str(""),
++            none(),
++            Value::str(&shown.tooltip),
++            Value::str(""),
++        ]),
++        "ItemIsMenu" => Value::Bool(false),
++        // No dbusmenu: the conventional path for an item without one.
++        "Menu" => Value::Path("/NO_DBUSMENU".into()),
++        _ => return None,
++    })
++}
++
++const NAMES: [&str; 16] = [
++    "Category",
++    "Id",
++    "Title",
++    "Status",
++    "WindowId",
++    "IconThemePath",
++    "IconName",
++    "IconPixmap",
++    "OverlayIconName",
++    "OverlayIconPixmap",
++    "AttentionIconName",
++    "AttentionIconPixmap",
++    "AttentionMovieName",
++    "ToolTip",
++    "ItemIsMenu",
++    "Menu",
++];
++
++const INTROSPECTION: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
++<node>
++  <interface name="org.kde.StatusNotifierItem">
++    <property name="Category" type="s" access="read"/>
++    <property name="Id" type="s" access="read"/>
++    <property name="Title" type="s" access="read"/>
++    <property name="Status" type="s" access="read"/>
++    <property name="WindowId" type="i" access="read"/>
++    <property name="IconThemePath" type="s" access="read"/>
++    <property name="IconName" type="s" access="read"/>
++    <property name="IconPixmap" type="a(iiay)" access="read"/>
++    <property name="OverlayIconName" type="s" access="read"/>
++    <property name="OverlayIconPixmap" type="a(iiay)" access="read"/>
++    <property name="AttentionIconName" type="s" access="read"/>
++    <property name="AttentionIconPixmap" type="a(iiay)" access="read"/>
++    <property name="AttentionMovieName" type="s" access="read"/>
++    <property name="ToolTip" type="(sa(iiay)ss)" access="read"/>
++    <property name="ItemIsMenu" type="b" access="read"/>
++    <property name="Menu" type="o" access="read"/>
++    <method name="ContextMenu"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
++    <method name="Activate"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
++    <method name="SecondaryActivate"><arg name="x" type="i" direction="in"/><arg name="y" type="i" direction="in"/></method>
++    <method name="Scroll"><arg name="delta" type="i" direction="in"/><arg name="orientation" type="s" direction="in"/></method>
++    <signal name="NewTitle"/>
++    <signal name="NewIcon"/>
++    <signal name="NewAttentionIcon"/>
++    <signal name="NewOverlayIcon"/>
++    <signal name="NewToolTip"/>
++    <signal name="NewStatus"><arg name="status" type="s"/></signal>
++  </interface>
++  <interface name="org.freedesktop.DBus.Properties">
++    <method name="Get"><arg type="s" direction="in"/><arg type="s" direction="in"/><arg type="v" direction="out"/></method>
++    <method name="GetAll"><arg type="s" direction="in"/><arg type="a{sv}" direction="out"/></method>
++  </interface>
++  <interface name="org.freedesktop.DBus.Introspectable">
++    <method name="Introspect"><arg type="s" direction="out"/></method>
++  </interface>
++</node>"#;
++
++const ROOT_INTROSPECTION: &str = r#"<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
++<node><node name="StatusNotifierItem"/></node>"#;
++
++fn int(v: Option<&Value>) -> i32 {
++    match v {
++        Some(Value::Num(n)) => *n as i32,
++        Some(Value::I32(n)) => *n,
++        _ => 0,
++    }
++}
++
++/// A status item shown in the tray while this lives; dropping it takes the
++/// item away.
++pub struct StatusNotifier {
++    shared: Arc<Mutex<Shared>>,
++}
++
++impl StatusNotifier {
++    /// Serve an item named `id`, titled `title`, and register it with the
++    /// desktop's tray. `heard` runs on the item's thread for each click.
++    /// An error when there is no session bus or the desktop has no tray.
++    pub fn start(
++        id: &str,
++        title: &str,
++        heard: impl Fn(Heard) + Send + 'static,
++    ) -> Result<StatusNotifier, String> {
++        let address = std::env::var("DBUS_SESSION_BUS_ADDRESS")
++            .ok()
++            .filter(|a| !a.is_empty())
++            .ok_or("there is no session bus")?;
++        let mut bus = Bus::connect(&address, Duration::from_secs(5))?;
++        let owned = bus.call(
++            DBUS,
++            DBUS_PATH,
++            DBUS,
++            "NameHasOwner",
++            &[Value::str(WATCHER)],
++        )?;
++        if owned.first() != Some(&Value::Bool(true)) {
++            return Err("the desktop shows no tray (no StatusNotifierWatcher on the session bus; on GNOME, enable the AppIndicator extension)".into());
++        }
++        let name = format!("org.kde.StatusNotifierItem-{}-1", std::process::id());
++        // DBUS_NAME_FLAG_DO_NOT_QUEUE: this process owns it or none.
++        bus.call(
++            DBUS,
++            DBUS_PATH,
++            DBUS,
++            "RequestName",
++            &[Value::str(&name), Value::U32(4)],
++        )?;
++        bus.subscribe(&format!(
++            "type='signal',sender='{DBUS}',interface='{DBUS}',member='NameOwnerChanged',arg0='{WATCHER}'"
++        ))?;
++        bus.wait_forever();
++        let out = bus.stream.try_clone().map_err(|e| e.to_string())?;
++        let _ = out.set_write_timeout(Some(Duration::from_secs(5)));
++        let shared = Arc::new(Mutex::new(Shared {
++            out,
++            serial: bus.serial,
++            shown: Shown {
++                id: id.to_owned(),
++                title: title.to_owned(),
++                tooltip: title.to_owned(),
++                icons: Vec::new(),
++            },
++        }));
++        // Registered from the item's own thread, which answers the
++        // watcher's reads that follow at once.
++        shared.lock().map_err(|e| e.to_string())?.register(&name);
++        let serving = shared.clone();
++        std::thread::Builder::new()
++            .name("exact-tray".into())
++            .spawn(move || serve(bus, serving, name, heard))
++            .map_err(|e| e.to_string())?;
++        Ok(StatusNotifier { shared })
++    }
++
++    /// Show `icons` (one picture per size) in the tray.
++    pub fn set_icon(&self, icons: Vec<Pixmap>) {
++        if let Ok(mut shared) = self.shared.lock() {
++            if shared.shown.icons != icons {
++                shared.shown.icons = icons;
++                shared.signal("NewIcon");
++            }
++        }
++    }
++
++    /// The tooltip, the item's label.
++    pub fn set_tooltip(&self, text: &str) {
++        if let Ok(mut shared) = self.shared.lock() {
++            if shared.shown.tooltip != text {
++                shared.shown.tooltip = text.to_owned();
++                shared.signal("NewToolTip");
++            }
++        }
++    }
++}
++
++impl Drop for StatusNotifier {
++    fn drop(&mut self) {
++        // The reader's blocked read ends, and with the connection the
++        // bus releases the name, which the watcher hears.
++        if let Ok(shared) = self.shared.lock() {
++            let _ = shared.out.shutdown(std::net::Shutdown::Both);
++        }
++    }
++}
++
++fn serve(mut bus: Bus, shared: Arc<Mutex<Shared>>, name: String, heard: impl Fn(Heard)) {
++    while let Ok(m) = bus.message() {
++        let Ok(mut s) = shared.lock() else { return };
++        match m.kind {
++            wire::METHOD_CALL => {
++                if let Some(click) = answer(&mut s, &m) {
++                    drop(s);
++                    heard(click);
++                }
++            }
++            wire::SIGNAL if m.member == "NameOwnerChanged" => {
++                // The watcher came back: register with the new one.
++                if let [Value::Str(n), _, Value::Str(owner)] = m.body.as_slice() {
++                    if n == WATCHER && !owner.is_empty() {
++                        s.register(&name);
++                    }
++                }
++            }
++            wire::ERROR => {
++                eprintln!("exact: tray: {}", m.error_name);
++            }
++            _ => {}
++        }
++    }
++}
++
++/// Answer call `m`; the click it was, if one.
++fn answer(s: &mut Shared, m: &Message) -> Option<Heard> {
++    const UNKNOWN_METHOD: &str = "org.freedesktop.DBus.Error.UnknownMethod";
++    let str_at = |i: usize| match m.body.get(i) {
++        Some(Value::Str(s)) => s.as_str(),
++        _ => "",
++    };
++    match (m.path.as_str(), m.interface.as_str(), m.member.as_str()) {
++        (_, PEER, "Ping") => s.reply(m, &[]),
++        ("/", INTROSPECTABLE, "Introspect") => s.reply(m, &[Value::str(ROOT_INTROSPECTION)]),
++        (ITEM_PATH, INTROSPECTABLE, "Introspect") => s.reply(m, &[Value::str(INTROSPECTION)]),
++        (ITEM_PATH, PROPERTIES, "Get") => match property(&s.shown, str_at(1)) {
++            Some(v) => s.reply(m, &[Value::Variant(Box::new(v))]),
++            None => s.refuse(
++                m,
++                "org.freedesktop.DBus.Error.UnknownProperty",
++                "no such property",
++            ),
++        },
++        (ITEM_PATH, PROPERTIES, "GetAll") => {
++            let entries = NAMES
++                .iter()
++                .filter_map(|n| Some((*n, property(&s.shown, n)?)))
++                .collect();
++            s.reply(m, &[Value::dict(entries)]);
++        }
++        (ITEM_PATH, ITEM | "", member) => {
++            let at = (int(m.body.first()), int(m.body.get(1)));
++            let click = match member {
++                "Activate" => Heard::Activate(at.0, at.1),
++                "SecondaryActivate" => Heard::SecondaryActivate(at.0, at.1),
++                "ContextMenu" => Heard::ContextMenu(at.0, at.1),
++                "Scroll" => Heard::Scroll(at.0, str_at(1).to_owned()),
++                _ => {
++                    s.refuse(m, UNKNOWN_METHOD, "no such method");
++                    return None;
++                }
++            };
++            s.reply(m, &[]);
++            return Some(click);
++        }
++        _ => s.refuse(m, UNKNOWN_METHOD, "no such method"),
++    }
++    None
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn argb_unpremultiplies_into_network_order() {
++        // Half-transparent pure red, premultiplied.
++        assert_eq!(argb(&[128, 0, 0, 128], 1.), vec![128, 255, 0, 0]);
++        assert_eq!(argb(&[0, 0, 0, 0], 1.), vec![0, 0, 0, 0]);
++        assert_eq!(argb(&[255, 255, 255, 255], 0.5)[0], 128);
++    }
++
++    #[test]
++    fn get_all_answers_every_property_the_specification_names() {
++        let shown = Shown {
++            id: "com.example.app".into(),
++            title: "Example".into(),
++            tooltip: "Example".into(),
++            icons: vec![Pixmap {
++                width: 1,
++                height: 1,
++                argb: vec![255, 1, 2, 3],
++            }],
++        };
++        for name in NAMES {
++            assert!(property(&shown, name).is_some(), "{name}");
++        }
++        assert_eq!(
++            property(&shown, "IconPixmap").unwrap().signature(),
++            "a(iiay)"
++        );
++        assert_eq!(
++            property(&shown, "ToolTip").unwrap().signature(),
++            "(sa(iiay)ss)"
++        );
++        assert_eq!(property(&shown, "WindowId").unwrap().signature(), "i");
++    }
++}
+diff --git a/host/painted/src/portal/wire.rs b/host/painted/src/portal/wire.rs
+index 71a9a2774..b4e986b76 100644
+--- a/host/painted/src/portal/wire.rs
++++ b/host/painted/src/portal/wire.rs
+@@ -11,6 +11,8 @@ pub(crate) enum Value {
+     Byte(u8),
+     Bool(bool),
+     U32(u32),
++    /// An `i`, written; `i` read is [`Value::Num`].
++    I32(i32),
+     Num(i64),
+     F64(f64),
+     Str(String),
+@@ -62,6 +64,7 @@ impl Value {
+             Value::Byte(_) => "y".into(),
+             Value::Bool(_) => "b".into(),
+             Value::U32(_) => "u".into(),
++            Value::I32(_) => "i".into(),
+             Value::Num(_) => "x".into(),
+             Value::F64(_) => "d".into(),
+             Value::Str(_) => "s".into(),
+@@ -114,6 +117,10 @@ pub(crate) fn write(buf: &mut Vec<u8>, v: &Value) {
+             pad(buf, 4);
+             buf.extend_from_slice(&n.to_le_bytes());
+         }
++        Value::I32(n) => {
++            pad(buf, 4);
++            buf.extend_from_slice(&n.to_le_bytes());
++        }
+         Value::Num(n) => {
+             pad(buf, 8);
+             buf.extend_from_slice(&n.to_le_bytes());
+@@ -327,6 +334,54 @@ pub(crate) fn message(
+     interface: &str,
+     member: &str,
+     body: &[Value],
++) -> Vec<u8> {
++    encode(
++        kind,
++        serial,
++        reply_serial,
++        destination,
++        path,
++        interface,
++        member,
++        "",
++        body,
++    )
++}
++
++/// An `ERROR` reply to call `reply_serial` from `destination`: the error's
++/// `name` and its message.
++#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
++pub(crate) fn error(
++    serial: u32,
++    reply_serial: u32,
++    destination: &str,
++    name: &str,
++    text: &str,
++) -> Vec<u8> {
++    encode(
++        ERROR,
++        serial,
++        Some(reply_serial),
++        destination,
++        "",
++        "",
++        "",
++        name,
++        &[Value::str(text)],
++    )
++}
++
++#[allow(clippy::too_many_arguments)]
++fn encode(
++    kind: u8,
++    serial: u32,
++    reply_serial: Option<u32>,
++    destination: &str,
++    path: &str,
++    interface: &str,
++    member: &str,
++    error_name: &str,
++    body: &[Value],
+ ) -> Vec<u8> {
+     let mut encoded = Vec::new();
+     for v in body {
+@@ -344,6 +399,9 @@ pub(crate) fn message(
+     if !member.is_empty() {
+         fields.push(field(3, Value::str(member)));
+     }
++    if !error_name.is_empty() {
++        fields.push(field(4, Value::str(error_name)));
++    }
+     if let Some(n) = reply_serial {
+         fields.push(field(5, Value::U32(n)));
+     }
+diff --git a/host/painted/src/presenter/palette.rs b/host/painted/src/presenter/palette.rs
+index adb7fae35..acbbedcb6 100644
+--- a/host/painted/src/presenter/palette.rs
++++ b/host/painted/src/presenter/palette.rs
+@@ -289,6 +289,31 @@ impl<D: DataSource> Presenter<D> {
+         self.brush.colors_changed();
+         self.dirty = true;
+     }
++
++    /// Colours a host's shell gives some of Exact's roles where it tells
++    /// no whole palette (the Linux tray's window takes GNOME's popup
++    /// menu's): `(role, light, dark)`, RGBA. Reported for the process, and
++    /// the page painted again under them.
++    pub fn report_role_colors(&mut self, entries: &[(&str, [u8; 4], [u8; 4])]) {
++        let mut out = Vec::with_capacity(entries.len() * 2);
++        for (name, light, dark) in entries {
++            let Some(id) = roles::role(name) else {
++                debug_assert!(false, "{name} is no colour role");
++                continue;
++            };
++            for (scheme, rgba) in [(false, light), (true, dark)] {
++                out.push((
++                    ColorValue::Role(id),
++                    scheme,
++                    Color(u32::from_be_bytes(*rgba)),
++                ));
++            }
++        }
++        roles::set_reported(out);
++        self.host.colors_changed(true);
++        self.brush.colors_changed();
++        self.dirty = true;
++    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/host/painted/src/presenter/top/status.rs b/host/painted/src/presenter/top/status.rs
+index 42e802ca2..2c61733eb 100644
+--- a/host/painted/src/presenter/top/status.rs
++++ b/host/painted/src/presenter/top/status.rs
+@@ -151,6 +151,58 @@ impl<D: DataSource> Presenter<D> {
+         self.dispatch_press(id, now_ms, true);
+     }
+ 
++    /// Status button `id` activated as a click on its item where the
++    /// window stands in for the item's popover (Linux's tray): its `press`,
++    /// then what it invokes, the `popovertarget` popover shown or hidden,
++    /// as the Mac's status item shows its `NSPopover`.
++    pub fn status_activate(&mut self, id: ViewId, now_ms: f64) {
++        self.press_point = None;
++        if self
++            .host
++            .runner()
++            .handlers_of(id)
++            .contains(&EventKind::Press)
++        {
++            self.press_then_follow(id, now_ms, true);
++        } else if let Some(key) = self.host.kernel().node(id).map(|node| node.key) {
++            self.follow_invocation(key, id, now_ms);
++        }
++    }
++
++    /// Whether the popover status button `id`'s `popovertarget` names is
++    /// open (as a popover, not a modal dialog).
++    pub fn status_popover_open(&self, id: ViewId) -> bool {
++        let kernel = self.host.kernel();
++        let Some(name) = kernel
++            .node(id)
++            .and_then(|n| n.props.str(PropId::Popovertarget).map(str::to_owned))
++            .filter(|name| !name.is_empty())
++        else {
++            return false;
++        };
++        self.element(&name)
++            .is_some_and(|key| self.open_mode(key) == Some(false))
++    }
++
++    /// Where the open popover status button `id`'s `popovertarget` names
++    /// is painted, in the window's points (x, y, width, height): a host
++    /// whose window stands in for it fits the window to it.
++    pub fn status_popover_box(&mut self, id: ViewId) -> Option<(f32, f32, f32, f32)> {
++        if !self.status_popover_open(id) {
++            return None;
++        }
++        let kernel = self.host.kernel();
++        let name = kernel
++            .node(id)?
++            .props
++            .str(PropId::Popovertarget)?
++            .to_owned();
++        let key = self.element(&name)?;
++        let pop = self.host.kernel().node_by_key(key)?.id;
++        let b = self.box_of(pop)?;
++        Some((b.rect.0, b.rect.1, b.rect.2, b.rect.3))
++    }
++
+     /// Open status button `id`'s menu in its host's window, whose screen
+     /// has `room` (points) for it, ending with Exit when `exit` (D7).
+     /// Opened from the keyboard, its first row takes the focus, as WinUI's
+diff --git a/packages/global-shortcuts/exact.json b/packages/global-shortcuts/exact.json
+index 8914af1c8..75036df9b 100644
+--- a/packages/global-shortcuts/exact.json
++++ b/packages/global-shortcuts/exact.json
+@@ -40,7 +40,7 @@
+           "key": "id",
+           "tap": { "event": "globalshortcut", "keep": true, "args": ["id", { "id": "id", "keys": "keys" }] }
+         },
+-        "unsupported": ["web", "linux", "ios", "android", "tvos", "terminal"]
++        "unsupported": ["web", "ios", "android", "tvos", "terminal"]
+       }
+     },
+     {
+@@ -51,7 +51,7 @@
+       "answers": "GlobalShortcutCheck",
+       "substitute": {
+         "shortcut": "check",
+-        "unsupported": ["web", "linux", "ios", "android", "tvos", "terminal"]
++        "unsupported": ["web", "ios", "android", "tvos", "terminal"]
+       }
+     },
+     {
+@@ -61,7 +61,7 @@
+       "sync": { "name": "globalShortcutStatusSync", "from": "read" },
+       "substitute": {
+         "default": { "available": true },
+-        "unsupported": ["web", "linux", "ios", "android", "tvos", "terminal"]
++        "unsupported": ["web", "ios", "android", "tvos", "terminal"]
+       }
+     },
+     { "event": "globalshortcut", "on": "root", "raised": "activation", "args": ["string", "GlobalShortcutEvent"], "hold": 16 }
+diff --git a/packages/global-shortcuts/linux/exact.json b/packages/global-shortcuts/linux/exact.json
+new file mode 100644
+index 000000000..0dcdc38f5
+--- /dev/null
++++ b/packages/global-shortcuts/linux/exact.json
+@@ -0,0 +1,13 @@
++{
++  "kind": "implementation",
++  "implements": "@exact/global-shortcuts@^1.0",
++  "platform": "linux",
++  "targets": ["linux"],
++  "options": {},
++  "names": [],
++  "views": [],
++  "hatches": [],
++  "sources": { "rust": ["../windows/lib.rs"] },
++  "artifacts": [],
++  "class": "GlobalShortcuts"
++}
+diff --git a/packages/global-shortcuts/package.json b/packages/global-shortcuts/package.json
+index e039957ea..aaf507c39 100644
+--- a/packages/global-shortcuts/package.json
++++ b/packages/global-shortcuts/package.json
+@@ -6,6 +6,7 @@
+   "exports": {
+     ".": "./exact.json",
+     "./apple": "./apple/exact.json",
+-    "./windows": "./windows/exact.json"
++    "./windows": "./windows/exact.json",
++    "./linux": "./linux/exact.json"
+   }
+ }
+diff --git a/packages/global-shortcuts/windows/lib.rs b/packages/global-shortcuts/windows/lib.rs
+index 3b929bc55..38e91dbdf 100644
+--- a/packages/global-shortcuts/windows/lib.rs
++++ b/packages/global-shortcuts/windows/lib.rs
+@@ -1,4 +1,9 @@
+-//! @exact/global-shortcuts on Windows (LLP 1133.025 D3): a chord registered
++//! @exact/global-shortcuts on Windows and Linux (LLP 1133.025 D3; Linux's
++//! `linux/exact.json` names this file): the host's services do the work.
++//! On Linux they bind the chord through the desktop portal
++//! (`host/linux/src/window/shortcuts.rs`), and `windows.repeat` does nothing.
++//!
++//! On Windows: a chord registered
+ //! system-wide while something reads it, through the host's one hot-key
+ //! table (`exact_painted::desktop`, `RegisterHotKey`), which raises
+ //! `globalshortcut` as a person's activation when it is pressed, once per

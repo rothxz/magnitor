@@ -62,7 +62,7 @@ pub struct TaskManager {
 
 impl TaskManager {
     /// The reading for `tick`, taken unless it already was.
-    fn read(&mut self, tick: i64) {
+    pub fn read(&mut self, tick: i64) {
         if self.last.as_ref().is_some_and(|r| r.tick == tick) {
             return;
         }
@@ -157,6 +157,11 @@ impl TaskManager {
             match_memory,
             error: String::new(),
         }
+    }
+
+    /// The CPU readings the graph keeps, oldest first (share.rs sends them to the phone).
+    pub fn loads(&self) -> Vec<Load> {
+        self.history.iter().copied().collect()
     }
 
     pub fn process(&mut self, pid: i64, tick: i64) -> ProcInfo {

@@ -5,7 +5,9 @@
     "build": "bun exact.mjs web-build --out dist",
     "start": "bun exact.mjs serve dist",
     "dev": "EXACT_IDENTITY=- bun exact.mjs mac --run",
-    "dev:linux": "bun exact.mjs linux && ./target/host-dev/magnitor-linux"
+    "dev:linux": "bun exact.mjs linux && ./target/host-dev/magnitor-linux",
+    "eas:build":"cd remote && bunx eas build -p ios --profile exact",
+    "eas:submit":"cd remote && bunx eas submit -p ios --profile exact --latest"
   },
   "dependencies": {
     "@exact/child-process": "file:../exact/packages/child-process",

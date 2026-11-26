@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Magnitor Remote's app icon, full bleed: iOS rounds the corners itself, so the square is
+       filled edge to edge with no margin, shadow or rim (Magnitor's assets/icon.svg has those for
+       the Mac). The artwork is Magnitor's tile scaled to fill the square.
+       Rendered to assets/icon-1024.png by `bun tools/icon.ts`. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60A5FA"/>
+      <stop offset="0.5" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.3" cy="0.15" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="lineShadow" filterUnits="userSpaceOnUse" x="-200" y="-200" width="1400" height="1400">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#body)"/>
+  <rect width="1024" height="1024" fill="url(#sheen)"/>
+
+  <!-- Magnitor's 824-point tile at (100, 100), scaled to the whole square. -->
+  <g transform="matrix(1.242718 0 0 1.242718 -124.2718 -124.2718)">
+    <g stroke="#E5E7EB" stroke-width="4" opacity="0.22">
+      <path d="M100 265H924M100 430H924M100 595H924M100 760H924"/>
+      <path d="M265 100V924M430 100V924M595 100V924M760 100V924"/>
+    </g>
+
+    <!-- the heartbeat as an M: a soft shadow, then the white line -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M40 628H300L372 300L512 540L652 300L724 628H770"
+            stroke="#0B1B4D" stroke-width="62" opacity="0.35" filter="url(#lineShadow)" transform="translate(0 14)"/>
+      <path d="M40 628H300L372 300L512 540L652 300L724 628H770"
+            stroke="#FFFFFF" stroke-width="62"/>
+    </g>
+
+    <!-- ping at the end of the line -->
+    <circle cx="804" cy="628" r="70" fill="none" stroke="#FFFFFF" stroke-width="10" opacity="0.35"/>
+    <circle cx="804" cy="628" r="108" fill="none" stroke="#FFFFFF" stroke-width="6" opacity="0.15"/>
+    <circle cx="804" cy="628" r="38" fill="#FFFFFF"/>
+  </g>
+</svg>

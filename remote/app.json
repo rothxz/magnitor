@@ -1,0 +1,44 @@
+{
+  "$schema": "../../exact/scripts/app.schema.json",
+  "name": "Magnitor Remote",
+  "short_name": "Magnitor Remote",
+  "id": "com.magnitor.remote",
+  "start_url": "/",
+  "display": "standalone",
+  "app": {
+    "id": "com.magnitor.remote",
+    "name": "Magnitor Remote"
+  },
+  "host": {
+    "web": {},
+    "ios": {
+      "minimumOS": "17.0",
+      "deviceFamily": [
+        "iphone",
+        "ipad"
+      ]
+    },
+    "macos": {
+      "minimumOS": "14.0",
+      "window": {
+        "width": 900,
+        "height": 700
+      }
+    }
+  },
+  "deploy": {
+    "store": {
+      "web": "0",
+      "ios": "0",
+      "macos": "0"
+    }
+  },
+  "icons": [
+    {
+      "src": "assets/icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

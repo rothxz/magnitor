@@ -6,7 +6,8 @@
 //! listening, `ports`) and `devFiles` (the project folders and caches a developer can clear,
 //! `devclean`), `devCommands` and `runDevCommand` (what only a tool can free: Go's module
 //! cache, a Docker prune, old simulators, `devtools`, Docker by its Engine, `docker`); and `unusual`, the processes behaving unusually, for the process alerts
-//! (`watchdog`). app.ts answers the rest; app.json places this source on a worker
+//! (`watchdog`); and `share`, Activity Monitor's reading served to Magnitor Remote on an
+//! iPhone on the same network (`share`), which may also act on the Mac (`control`). app.ts answers the rest; app.json places this source on a worker
 //! thread of its own (`rust.placement`), so a walk of many gigabytes never holds up the view.
 //!
 //! A walk is kept for its `generation`, the view's count of Measure Again and Clear Cache: the
@@ -16,13 +17,16 @@ use exact_runner::{Answer, DataError, DataSource, Store, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+pub mod control;
 pub mod devclean;
 pub mod devtools;
 pub mod docker;
 pub mod icons;
+pub mod pointer;
 pub mod ports;
 pub mod sample;
 pub mod sensors;
+pub mod share;
 pub mod tasks;
 pub mod vitals;
 pub mod walk;
@@ -35,7 +39,7 @@ mod shapes {
 use shapes::{AppIcon, Contents, ContractValue, Host, Item, Slice, Usage};
 
 /// The sources this crate answers; app.ts answers the others.
-pub const RUST_SOURCES: &[&str] = &["usage", "contents", "tasks", "process", "endProcess", "vitals", "appIcon", "appGroup", "endApp", "ports", "stopPort", "devFiles", "devCommands", "runDevCommand", "unusual", "host"];
+pub const RUST_SOURCES: &[&str] = &["usage", "contents", "tasks", "process", "endProcess", "vitals", "appIcon", "appGroup", "endApp", "ports", "stopPort", "devFiles", "devCommands", "runDevCommand", "unusual", "share", "newShareCode", "host"];
 
 /// A measured folder: its id in the view, its name, its group, and where it is under home.
 struct Measured {
@@ -67,6 +71,7 @@ pub struct Magnitor {
     dev: devclean::DevCleaner,
     tools: devtools::DevTools,
     watchdog: watchdog::Watchdog,
+    share: share::Share,
 }
 
 /// The home folder: the agent's stand-in (`--home`) under a drive, else the person's.
@@ -138,7 +143,7 @@ impl DataSource for Magnitor {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         match source {
             "host" => Ok(host().to_value()),
-            "usage" | "contents" | "tasks" | "process" | "endProcess" | "vitals" | "appIcon" | "appGroup" | "endApp" | "ports" | "stopPort" | "devFiles" | "devCommands" | "runDevCommand" | "unusual" => Err(DataError::Unavailable("measured at run time".into())),
+            "usage" | "contents" | "tasks" | "process" | "endProcess" | "vitals" | "appIcon" | "appGroup" | "endApp" | "ports" | "stopPort" | "devFiles" | "devCommands" | "runDevCommand" | "unusual" | "share" | "newShareCode" => Err(DataError::Unavailable("measured at run time".into())),
             _ => Err(DataError::UnknownSource(source.into())),
         }
     }
@@ -185,6 +190,14 @@ impl DataSource for Magnitor {
                 let limits = watchdog::Limits { cpu: float(2)?, busy_for: float(3)?, grow_gb: float(4)? };
                 Ok(Answer::Now(self.watchdog.unusual(number(0)?, float(1)?, limits).to_value()))
             }
+            // Whether sharing with an iPhone is on, its code, the pulse that asks again, and
+            // whether the phone may control the Mac.
+            "share" => {
+                let on = matches!(args.first(), Some(Value::Bool(true)));
+                let control = matches!(args.get(3), Some(Value::Bool(true)));
+                Ok(Answer::Now(self.share.share(on, text(1)?, control).to_value()))
+            }
+            "newShareCode" => Ok(Answer::Now(share::new_code().to_value())),
             "endProcess" => {
                 let force = matches!(args.get(1), Some(Value::Bool(true)));
                 Ok(Answer::Now(self.tasks.end(number(0)?, force).to_value()))

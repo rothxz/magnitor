@@ -1,0 +1,338 @@
+// Run on macOS (or iOS) with tools/fixture.ts answering on 127.0.0.1:47899 as a Mac called
+// Studio whose code is TEST-CODE. A test can't set Bonjour's answer, so the Mac is added by its
+// address in Settings, which opens by itself while no Mac is ready; a drive checks the Bonjour
+// list (`prefer extension local-network.browseServices=…`). A process the fixture quits is back
+// ten seconds later, so no two tests quit the same one.
+
+test "with no Mac, Settings opens by itself, can't be closed, and closes once the code matches"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  expect tree has "settings-title"
+  expect tree missing "settings-done"
+  expect text "current-mac" == "Connect to Your Mac"
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  expect state current == "addr:127.0.0.1:47899"
+  expect tree has "addr-127-0-0-1-47899"
+  expect tree has "code"
+  type "code" "nope-nope"
+  tap "connect"
+  clock data
+  expect state refused == true
+  expect tree has "code"
+  expect tree missing "settings-done"
+  type "code" "test-code"
+  tap "connect"
+  clock data
+  expect state refused == false
+  expect state statusLabel == "Connected"
+  expect tree missing "code"
+  clock +1000
+  clock settle
+  expect state forced == false
+  expect tree missing "settings-title"
+  expect text "control-title" == "Control"
+  expect text "control-mac" == "Studio"
+  reload
+  clock +10
+  clock data
+  clock settle
+  expect tree missing "settings-title"
+  expect state current == "addr:127.0.0.1:47899"
+
+test "Monitor shows the Mac's dashboard and keeps its sort"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  tap "tab-monitor"
+  clock data
+  expect text "monitor-title" == "Monitor"
+  expect text "cpu-load" == "18.6%"
+  expect text "cpu-user" == "12.5%"
+  expect text "cpu-system" == "6.1%"
+  expect text "cpu-peak" == "Peak 20% · Avg 16%"
+  expect text "memory-used" == "21.3 GB"
+  expect text "memory-total" == "of 32 GB"
+  expect text "cached" == "6.2 GB"
+  expect text "overview-processes" == "312"
+  expect tree has "cpu-graph"
+  expect tree has "memory-graph"
+  expect text "proc-501-name" == "Xcode"
+  expect text "proc-501-cpu" == "48.2%"
+  expect state activity.processes.0 .bar == 1
+  expect text "count" == "312 processes on Studio. Updated every 3 seconds. Swipe a process to quit it."
+  tap "sort-memory"
+  clock data
+  expect state activity.processes.0 .name == "Docker"
+  expect text "proc-502-memory" == "3.4 GB"
+  reload
+  clock data
+  tap "tab-monitor"
+  clock data
+  expect tree missing "settings-title"
+  expect state sort == "memory"
+  expect text "cpu-user" == "12.5%"
+
+test "the search field finds processes on the Mac"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  tap "tab-monitor"
+  clock data
+  type "search" "dock"
+  clock data
+  expect tree has "proc-502"
+  expect tree missing "proc-501"
+  expect tree missing "overview"
+  type "search" "nothing-like-it"
+  clock data
+  expect tree has "no-match"
+  type "search" ""
+  clock data
+  expect tree has "overview"
+  expect tree has "proc-501"
+
+test "a swipe quits a process, and Force Quit asks first"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  tap "tab-monitor"
+  clock data
+  expect tree has "proc-503"
+  tap "quit-503"
+  clock data
+  expect tree missing "proc-503"
+  tap "force-502"
+  clock settle
+  tap "end-cancel"
+  clock data
+  expect tree has "proc-502"
+  tap "force-502"
+  clock settle
+  tap "end-force"
+  clock data
+  expect tree missing "proc-502"
+  // macOS's own processes can't be quit: no swipe, and their detail says why.
+  expect tree missing "swipe-1"
+  tap "proc-1"
+  clock data
+  clock settle
+  expect text "detail-name" == "launchd"
+  expect text "detail-threads" == "14"
+  expect disabled "detail-quit"
+  expect text "detail-quit-note" == "This belongs to another user or to macOS, so it can’t be quit from here."
+
+test "an app's detail lists its processes and quits it"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  tap "tab-monitor"
+  clock data
+  tap "proc-501"
+  clock data
+  clock settle
+  expect text "detail-name" == "Xcode"
+  expect text "detail-sub" == "6 processes"
+  expect text "detail-cpu" == "48.2%"
+  expect tree has "proc-1501"
+  tap "detail-quit"
+  clock settle
+  tap "end-quit"
+  clock data
+  clock settle
+  expect tree has "cpu-load"
+  expect tree missing "proc-501"
+
+test "Settings keep the update interval, and forgetting the code locks Settings until it's entered again"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  tap "every-5"
+  expect text "interval-note" == "While Monitor shows, the Mac is read every 5 seconds. Its graphs show the last 40 readings."
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  tap "tab-monitor"
+  clock data
+  expect text "count" == "312 processes on Studio. Updated every 5 seconds. Swipe a process to quit it."
+  tap "settings-monitor"
+  clock settle
+  expect tree has "settings-done"
+  tap "sign-out"
+  expect state pairings == []
+  expect tree has "code"
+  expect tree missing "settings-done"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  expect tree has "settings-done"
+  tap "settings-done"
+  clock settle
+  expect tree missing "settings-title"
+  expect tree has "cpu-load"
+  reload
+  expect state interval == 5
+
+test "a Mac added by address that doesn’t answer says so, and the address is kept"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47898"
+  tap "add-address"
+  expect state addresses.0 == "127.0.0.1:47898"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  expect state statusLabel == "Can’t Reach"
+  expect tree has "settings-retry"
+  expect tree has "settings-done"
+  tap "settings-done"
+  clock settle
+  tap "tab-monitor"
+  clock data
+  expect tree has "retry"
+  reload
+  expect state addresses.0 == "127.0.0.1:47898"
+
+test "Control sets the Mac's volume, mutes it and locks it; Apps opens an app"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  clock data
+  expect tree has "volume"
+  type "volume" "65"
+  clock data
+  expect state controls.volume == 65
+  expect text "volume-value" == "65%"
+  expect state volumeDraft == -1
+  tap "mute"
+  clock data
+  expect state controls.muted == true
+  tap "mute"
+  clock data
+  expect state controls.muted == false
+  tap "display-off"
+  clock data
+  expect state controlled.ok == true
+  tap "lock"
+  clock data
+  expect state controlled.message == "Locked."
+  tap "tab-apps"
+  clock data
+  expect text "apps-title" == "Apps"
+  expect tree has "open-notes"
+  expect text "apps-note" == "3 apps on Studio. A tap opens one, or brings it to the front."
+  type "app-search" "saf"
+  expect tree has "open-safari"
+  expect tree missing "open-notes"
+  tap "open-safari"
+  clock data
+  expect state controlled.ok == true
+  type "app-search" "nothing-like-it"
+  expect tree has "no-app"
+
+test "a Mac that doesn't allow control says how to turn it on"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "VIEW-ONLY"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  clock data
+  expect state controls.status == "off"
+  expect tree missing "volume"
+  expect tree missing "open-trackpad"
+  expect tree has "controls-retry"
+  tap "tab-apps"
+  clock data
+  expect tree has "apps-retry"
+  tap "tab-monitor"
+  clock data
+  expect tree has "overview"
+
+test "the Trackpad moves the Mac's pointer, clicks, and holds Left for a drag"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  expect state padSpeed == "normal"
+  tap "speed-slow"
+  expect state padSpeed == "slow"
+  tap "speed-normal"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  clock data
+  tap "open-trackpad"
+  clock settle
+  expect state here == "trackpad"
+  expect text "trackpad-title" == "Trackpad"
+  expect tree has "pad"
+  // A drag moves the pointer right and down, further than the finger for a quick one.
+  tap "pad" drag 60 30
+  clock data
+  expect state pointed.ok == true
+  expect state touches.length == 0
+  // A quick touch is a click.
+  tap "pad"
+  clock data
+  expect state pointed.ok == true
+  tap "right"
+  clock data
+  expect state pointed.ok == true
+  tap "left" drag 0 0 hold 400
+  clock data
+  expect state holding == false
+  expect state pointed.ok == true
+  expect tree missing "pointer-error"
+  // The bar's Back still goes back (a swipe back is iOS's alone, refused over the pad).
+  back
+  clock settle
+  expect state here == "control"

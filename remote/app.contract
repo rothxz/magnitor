@@ -1,0 +1,974 @@
+// Magnitor Remote: Magnitor's Activity Monitor and controls for a Mac, from an iPhone on the same
+// Wi‑Fi. Three tabs work on the Mac chosen in Settings:
+// - Control: the Mac's volume, its display and lock, and a trackpad that fills the rest of the
+//   screen: one finger moves, a tap clicks, two fingers scroll, a two-finger tap right-clicks, and
+//   Left held down drags (app.ts's `pointer` sends them, a round trip at a time). It is the tab's
+//   root, so no edge swipe back competes with a finger on the pad.
+// - Monitor: the Mac's load with its recent history, and its busiest processes, which it can
+//   search and quit (a row's swipe: Quit at once, Force Quit after asking).
+// - Apps: the apps in the Mac's Applications folders, each opened with a tap.
+// Control and Apps need Magnitor's Settings › iPhone › Allow Control from iPhone (else the Mac
+// answers "off").
+//
+// Magnitor on the Mac serves the reading (Magnitor's data/src/share.rs) once Settings › iPhone ›
+// Share Activity with iPhone is on, and announces the Mac by Bonjour as `_magnitor._tcp`. Settings
+// lists those Macs (`browseServices`); a Mac Bonjour can't find (a guest network drops it) is
+// added by the address Magnitor's Settings show. A Mac asks once for the pairing code its
+// Settings show; the code is kept per Mac and sent with each request (app.ts's `ask`). Until a Mac
+// is chosen and its code matches, Settings stays open over the tabs, with no way to close it.
+//
+// One colour carries the data: the system blue (the accent) draws every ring, graph and bar; the
+// status colours mean only a level (memory pressure, thermal state, the connection) and red only
+// Force Quit.
+use browseServices, localNetworkStatus, LocalServices, LocalNetworkStatus from "@exact/local-network"
+use Badge, EmptyState, RingProgress from "exact:content"
+
+// Each tab has its own Settings route, so the sheet opens over the tab it was asked from.
+routes nav
+  tab control "/"
+    trackpad "/trackpad"
+    controlSettings "/settings"
+  tab monitor "/monitor"
+    proc "/monitor/proc/:pid"
+    group "/monitor/app/:app"
+    monitorSettings "/monitor/settings"
+  tab apps "/apps"
+    appsSettings "/apps/settings"
+
+// One row of the Mac's Activity Monitor: a process, or an app's processes together (`group`,
+// whose `pid` is its main process's and `app` its bundle's path). `bar` is its share of the
+// busiest row's, by what the list is sorted by (app.ts's `withBars`).
+shape Proc
+  pid: number
+  name: string
+  detail: string
+  cpu: string
+  memory: string
+  group: bool
+  count: number
+  app: string
+  mine: bool
+  bar: number
+
+// The Mac's reading (CPU shares are numbers as text, "12.5", shown with their %; `cpuLoad`,
+// `cpuPeak` and `memoryPeak` are numbers). The graphs are paths in a 100 × 40 box, newest at the
+// right (app.ts's `area` and `line`). `status` is "" when it was read, "code" when the Mac
+// refused the code, and "offline" when it couldn't be reached; `message` says why.
+shape Activity
+  name: string
+  cpuUser: string
+  cpuSystem: string
+  cpuIdle: string
+  cpuLoad: number
+  cpuPeak: number
+  cpuAverage: number
+  cpuUserArea: string
+  cpuSystemArea: string
+  cpuLine: string
+  memoryArea: string
+  memoryLine: string
+  memoryPeak: number
+  memoryUsed: string
+  memoryTotal: string
+  memoryShare: number
+  cached: string
+  compressed: string
+  swap: string
+  pressure: string
+  thermal: string
+  temperature: string
+  count: number
+  more: number
+  matchCount: number
+  processes: Proc[]
+  status: string
+  message: string
+
+// One process as Activity Monitor's inspector shows it, or an app's processes together (`group`:
+// `pid` is its main process, `path` its bundle, `processes` each of them, busiest first).
+shape Detail
+  found: bool
+  group: bool
+  pid: number
+  name: string
+  path: string
+  user: string
+  parent: string
+  cpu: string
+  cpuTime: string
+  threads: string
+  memory: string
+  realMemory: string
+  running: string
+  count: number
+  mine: bool
+  own: bool
+  processes: Proc[]
+  status: string
+  message: string
+
+shape Ended
+  ok: bool
+  message: string
+
+// A finger on the trackpad: its pointer's id, where it was last in the window (`x`, `y`) and in
+// the pad (`ox`, `oy`, for its mark).
+shape Touch
+  id: number
+  x: number
+  y: number
+  ox: number
+  oy: number
+
+// An app the Mac can open: its name and its bundle's path.
+shape MacApp
+  name: string
+  app: string
+
+// The Mac's sound (`volume` 0–100; `hasVolume` false when its output sets its own) and the apps
+// in its Applications folders. `status` is "" when read, "off" when the Mac doesn't allow
+// control, "code" or "offline" as Activity's; `ready` once read.
+shape Controls
+  ready: bool
+  hasVolume: bool
+  volume: number
+  muted: bool
+  apps: MacApp[]
+  status: string
+  message: string
+
+fn macName(id: string): string = id.startsWith("svc:") or id.startsWith("addr:") ? id.slice(id.indexOf(":") + 1) : id
+// A kept pairing is "<code> <Mac's id>": a code has no space, a Mac's id ("svc:<Bonjour name>" or
+// "addr:<host:port>") may.
+fn pairedId(p: string): string = p.slice(p.indexOf(" ") + 1)
+fn codeFor(ps: string[], id: string): string = match first(ps.filter(p => pairedId(p) == id)) { case some(p) => p.slice(0, p.indexOf(" ")), case none => "" }
+fn isSettings(name: string): bool = name == "controlSettings" or name == "monitorSettings" or name == "appsSettings"
+fn settingsPath(tab: string): string = tab == "monitor" ? path("monitorSettings") : tab == "apps" ? path("appsSettings") : path("controlSettings")
+// The trackpad's speed, a multiple of the finger's movement (app.ts's `gain` accelerates it).
+fn speedOf(s: string): number = s == "slow" ? 0.6 : s == "fast" ? 1.7 : 1
+fn procPath(p: Proc): string = p.group ? path("group", encodeRouteSegment(p.app)) : path("proc", `${p.pid}`)
+fn slug(id: string): string = id.toLowerCase().replaceAll(" ", "-").replaceAll(":", "-").replaceAll(".", "-")
+// The memory pressure's and thermal state's colours, as Magnitor shows them.
+fn levelTint(level: string): string = level == "Critical" ? "-exact-system-red" : level == "Serious" ? "-exact-system-orange" : level == "Warning" or level == "Fair" ? "-exact-system-yellow" : "-exact-system-green"
+fn processesText(n: number): string = `${n} ${n == 1 ? "process" : "processes"}`
+fn appsText(n: number): string = `${n} ${n == 1 ? "app" : "apps"}`
+fn everyText(s: number): string = `every ${s} ${s == 1 ? "second" : "seconds"}`
+
+// A ring's share of the whole, as `RingProgress` takes it.
+fn share(percent: number): number = min(1, max(0, percent / 100))
+
+component Remote
+  state pairings: string[] = [] persist
+  state addresses: string[] = [] persist
+  // The Mac the tabs work on ("svc:<Bonjour name>" or "addr:<host:port>"; "" until one is chosen).
+  state current = "" persist
+  // Seconds between readings while Monitor shows (Settings › Updates), and the list's order.
+  state interval = 3 persist
+  state sort = "cpu" persist
+  state addressDraft = ""
+  state codeDraft = ""
+  state query = ""
+  state tick = 0
+  // Settings opened because no Mac was ready: it closes by itself once one answers.
+  state forced = false
+  // The process a Quit asks about, and why the last one failed.
+  state aimPid = 0
+  state aimApp = ""
+  state aimName = ""
+  state endError = ""
+  // The volume while the slider is held (-1: the Mac's), the apps' search, and a failed
+  // control's title and reason.
+  state volumeDraft = -1
+  state appQuery = ""
+  state controlTitle = ""
+  state controlError = ""
+  // The trackpad: its speed, the fingers on it, when the first went down, how far they've gone
+  // and how many were down at once (a tap's and a scroll's test), and whether Left is held.
+  state padSpeed = "normal" persist
+  state touches: Touch[] = []
+  state touchAt = 0
+  state touchTravel = 0
+  state touchMost = 0
+  state holding = false
+  state heldByPointer = false
+  resource network = localNetworkStatus() as shape LocalNetworkStatus else empty()
+  // Finding Macs is the app's whole purpose, so it browses at launch.
+  resource found = browseServices(type="_magnitor._tcp") as shape LocalServices else empty()
+  derive here = top(nav).name
+  derive macId = current
+  derive code = codeFor(pairings, macId)
+  derive onMonitor = here == "monitor" or here == "proc" or here == "group"
+  derive onSettings = isSettings(here)
+  derive detailPid = here == "proc" ? match parseNumber(top(nav).params.pid) { case some(n) => n, case none => 0 } : 0
+  derive detailApp = here == "group" ? top(nav).params.app : ""
+  // The reading is asked for whatever tab shows, so Settings knows whether the code matched.
+  resource activity = activity(macId, code, sort, query, tick) when macId != "" and code != "" as shape Activity else empty() transient
+  resource detail = detail(macId, code, detailPid, detailApp, tick) when (here == "proc" or here == "group") and code != "" as shape Detail else empty() transient
+  mutation ended as shape Ended refreshes activity, detail then afterEnd
+  // The reading shown is this Mac's: a new one waits for its first answer.
+  derive shown = activity.name != "" and activity.status == ""
+  derive refused = code != "" and activity.status == "code"
+  derive connected = code != "" and shown
+  // No Mac to work on: Settings stays up until one is chosen and its code matches.
+  derive mustPair = macId == "" or code == "" or refused
+  derive macTitle = shown ? activity.name : macName(macId)
+  derive statusLabel = macId == "" ? "" : code == "" ? "Not Paired" : refused ? "Code Doesn’t Match" : activity.status == "offline" ? "Can’t Reach" : connected ? "Connected" : "Connecting…"
+  derive statusTint = connected ? "-exact-system-green" : activity.status == "offline" or refused ? "-exact-system-orange" : "-exact-system-gray"
+  resource controls = controls(macId, code) when (nav.tab == "control" or nav.tab == "apps") and not mustPair as shape Controls else empty() transient
+  mutation controlled as shape Ended refreshes controls then afterControl
+  derive volumeShown = volumeDraft >= 0 ? volumeDraft : controls.volume
+  // Each move is its own send; app.ts gathers them, so none waits on another.
+  mutation pointed as shape Ended parallel
+  derive pointerError = match pointed { case some(p) => p.ok ? "" : p.message, case none => "" }
+  derive firstTouch = match touches.at(0) { case some(t) => t.id, case none => -1 }
+  derive appsShown = controls.apps.filter(a => a.name.toLowerCase().includes(appQuery.trim().toLowerCase()))
+  derive searching = query.trim() != ""
+  derive byMemory = sort == "memory"
+  derive detailShown = detail.status == "" and detail.name != ""
+  // `every` takes a literal: one timer per choice in Settings › Updates.
+  derive polling = onMonitor and not mustPair
+  task poll2 when polling and interval == 2
+    every(2000, poll)
+  task poll3 when polling and interval == 3
+    every(3000, poll)
+  task poll5 when polling and interval == 5
+    every(5000, poll)
+  task poll10 when polling and interval == 10
+    every(10000, poll)
+  task askForMac when mustPair and not onSettings
+    after(1, openForced)
+  // A moment to see "Connected" before the sheet goes.
+  task closeWhenConnected when forced and connected and onSettings
+    after(800, closeForced)
+
+  action pick(name: string)
+    nav = select(nav, name)
+  action follow(url: string)
+    nav = go(nav, url)
+  action back
+    forced = false
+    nav = back(nav)
+  action poll
+    tick = tick + 1
+  action retry
+    refresh activity
+  action openSettings
+    if not onSettings
+      nav = push(nav, settingsPath(nav.tab))
+  action openForced
+    forced = true
+    if not onSettings
+      nav = push(nav, settingsPath(nav.tab))
+  action closeForced
+    forced = false
+    haptic("success")
+    if onSettings
+      nav = back(nav)
+  action openSystemSettings
+    openURL("app-settings:")
+  action chooseMac(id: string)
+    if id != macId
+      current = id
+      codeDraft = ""
+      query = ""
+      appQuery = ""
+      haptic("selection")
+  action editAddress(v: string)
+    addressDraft = v
+  // An added address is the Mac the tabs work on, so its code is asked for next.
+  action addAddress
+    let a = addressDraft.trim()
+    if a != ""
+      if not addresses.includes(a)
+        addresses = addresses.concat([a])
+        haptic("success")
+      current = `addr:${a}`
+      codeDraft = ""
+    addressDraft = ""
+  action forgetAddress(a: string)
+    addresses = addresses.filter(x => x != a)
+    pairings = pairings.filter(p => pairedId(p) != `addr:${a}`)
+    if macId == `addr:${a}`
+      current = ""
+  action editCode(v: string)
+    codeDraft = v
+  // The code replaces any kept for this Mac; the reading it asks for says whether it matched.
+  action pair
+    let c = codeDraft.toUpperCase().replaceAll(" ", "")
+    if c != ""
+      pairings = pairings.filter(p => pairedId(p) != macId).concat([`${c} ${macId}`])
+      codeDraft = ""
+  // Forgets this Mac's code; Settings then asks for it again.
+  action signOut
+    pairings = pairings.filter(p => pairedId(p) != macId)
+    codeDraft = ""
+  action pickSort(v: string)
+    sort = v
+  action setInterval(s: number)
+    interval = s
+  action search(v: string)
+    query = v
+  // A swipe's Quit asks the app to quit, as the Dock's Quit does: it can still ask to save.
+  action quit(pid: number, app: string)
+    send ended = endProcess(macId, code, pid, app, false)
+  // Force Quit, and a detail's Quit, ask first: an app forced to quit loses what it hasn't saved.
+  action ask(pid: number, app: string, name: string)
+    aimPid = pid
+    aimApp = app
+    aimName = name
+    showModal("end-ask")
+  action end(force: bool)
+    send ended = endProcess(macId, code, aimPid, aimApp, force)
+  action retryControls
+    refresh controls
+  action dragVolume(v: number)
+    volumeDraft = round(v)
+  action setVolume(v: number)
+    volumeDraft = round(v)
+    controlTitle = "Couldn’t Change the Volume"
+    send controlled = control(macId, code, "volume", `${round(v)}`)
+  action setMuted(on: bool)
+    controlTitle = on ? "Couldn’t Mute" : "Couldn’t Unmute"
+    haptic("selection")
+    send controlled = control(macId, code, "mute", on ? "1" : "0")
+  action openApp(app: string, name: string)
+    controlTitle = `Couldn’t Open ${name}`
+    send controlled = control(macId, code, "open", app)
+  action displayOff
+    controlTitle = "Couldn’t Turn the Display Off"
+    send controlled = control(macId, code, "display-off", "")
+  action lockMac
+    controlTitle = "Couldn’t Lock the Mac"
+    send controlled = control(macId, code, "lock", "")
+  action searchApps(v: string)
+    appQuery = v
+  // The trackpad screen's `swiperight`, there only to refuse iOS's swipe back: it never runs.
+  action holdStill
+    touchTravel = touchTravel
+  action pickSpeed(v: string)
+    padSpeed = v
+  action touchDown(e: PointerEvent)
+    let next = touches.filter(t => t.id != e.pointerId).concat([Touch(id=e.pointerId, x=e.clientX, y=e.clientY, ox=e.offsetX, oy=e.offsetY)])
+    if touches.length == 0
+      touchAt = performanceNow()
+      touchTravel = 0
+      touchMost = 1
+    else
+      touchMost = max(touchMost, next.length)
+    touches = next
+  // One finger moves the pointer; once two were down, the first one's moves scroll until all
+  // lift, so a lifted finger never jumps the pointer.
+  action touchMove(e: PointerEvent)
+    match first(touches.filter(t => t.id == e.pointerId))
+      case some(t)
+        let dx = e.clientX - t.x
+        let dy = e.clientY - t.y
+        touches = touches.map(u => u.id == e.pointerId ? Touch(id=u.id, x=e.clientX, y=e.clientY, ox=e.offsetX, oy=e.offsetY) : u)
+        touchTravel = touchTravel + max(dx, 0 - dx) + max(dy, 0 - dy)
+        if touchMost >= 2
+          if firstTouch == e.pointerId
+            send pointed = pointer(macId, code, "scroll", dx, dy, 1)
+        else
+          send pointed = pointer(macId, code, "move", dx, dy, speedOf(padSpeed))
+      case none
+        touchTravel = touchTravel
+  // A quick touch that barely moved is a click: one finger's the left, two's the right.
+  action touchUp(e: PointerEvent)
+    let rest = touches.filter(t => t.id != e.pointerId)
+    touches = rest
+    if rest.length == 0 and touchMost > 0 and performanceNow() - touchAt < 300 and touchTravel < 12
+      haptic("selection")
+      send pointed = pointer(macId, code, (touchMost >= 2 ? "right" : "left"), 0, 0, 1)
+  // Left held down holds the Mac's button, so a finger on the pad drags; let go, it lets go.
+  action leftDown(e: PointerEvent)
+    holding = true
+    heldByPointer = true
+    haptic("selection")
+    send pointed = pointer(macId, code, "down", 0, 0, 1)
+  action leftUp(e: PointerEvent)
+    holding = false
+    send pointed = pointer(macId, code, "up", 0, 0, 1)
+  // A press with no pointer before it (VoiceOver's) clicks; one after a hold was that hold.
+  action leftPress
+    if heldByPointer
+      heldByPointer = false
+    else
+      haptic("selection")
+      send pointed = pointer(macId, code, "left", 0, 0, 1)
+  action rightPress
+    haptic("selection")
+    send pointed = pointer(macId, code, "right", 0, 0, 1)
+  action afterControl
+    volumeDraft = -1
+    match controlled
+      case some(c)
+        if c.ok
+          haptic("success")
+        else
+          controlError = c.message
+          haptic("error")
+          showModal("control-failed")
+      case none
+        controlError = controlError
+  action afterEnd
+    match ended
+      case some(e)
+        if e.ok
+          haptic("success")
+          if here == "proc" or here == "group"
+            nav = back(nav)
+        else
+          endError = e.message
+          haptic("error")
+          showModal("end-failed")
+      case none
+        endError = endError
+
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="root" width="100%" height="100%" display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              // Control: the Mac's trackpad, sound and screen, as a list.
+              if e.name == "control"
+                column navigationKey=`${e.id}` navigationScroll="controls" position="absolute" inset=0 display="flex" flex-direction="column"
+                  header display="flex" align-items="center" gap=8 padding="8px 16px"
+                    text "Control" role="heading" aria-level=1 flex=1 testId="control-title"
+                    text macTitle testId="control-mac"
+                    button press=openSettings aria-label="Settings" testId="settings-control"
+                      image "symbol:settings"
+                  if mustPair
+                    EmptyState(symbol="symbol:smartphone", title="No Mac Connected", message="Choose your Mac in Settings to control it from here.")
+                      button press=openSettings testId="control-connect"
+                        text "Open Settings"
+                  else if controls.status == "off"
+                    EmptyState(symbol="symbol:lock", title="Control Is Off", message=controls.message)
+                      button press=retryControls testId="controls-retry"
+                        text "Try Again"
+                  else if controls.status != ""
+                    EmptyState(symbol="symbol:alert", title=`Can’t Reach ${macTitle}`, message=controls.message)
+                      button press=retryControls testId="controls-retry"
+                        text "Try Again"
+                  else if not controls.ready
+                    column flex=1 align-items="center" justify-content="center" gap=12
+                      progress aria-label="Loading"
+                  else
+                    list id="controls" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                      section
+                        link href=path("trackpad") testId="open-trackpad"
+                          row gap=12 align-items="center" flex=1 min-width=0
+                            Tile(symbol="symbol:smartphone")
+                            column flex=1 min-width=0 gap=2
+                              text "Trackpad"
+                              text "Move the pointer, click and scroll" font="-exact-footnote" color="-exact-secondary-label"
+                          image "symbol:forward-chevron"
+                      section
+                        header
+                          text "Sound"
+                        row gap=12 align-items="center"
+                          image (controls.muted ? "symbol:speaker-mute" : "symbol:speaker") color="-exact-system-blue" aria-hidden=true
+                          input type="range" min=0 max=100 step=1 value=volumeShown input=dragVolume change=setVolume disabled=(not controls.hasVolume) aria-label="Volume" testId="volume" flex=1 min-width=0
+                          text `${volumeShown}%` font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="volume-value"
+                        row
+                          text "Mute" flex=1
+                          input type="checkbox" switch checked=controls.muted change=setMuted aria-label="Mute" testId="mute"
+                        footer
+                          text (controls.hasVolume ? `The volume of ${macTitle}’s sound output.` : "This Mac’s sound output sets its own volume, as a display connected by HDMI does.") testId="volume-note"
+                      section
+                        header
+                          text "Screen"
+                        row
+                          button press=displayOff testId="display-off" flex=1
+                            image "symbol:moon"
+                            text "Turn Display Off"
+                        row
+                          button press=lockMac testId="lock" flex=1
+                            image "symbol:lock"
+                            text "Lock Screen"
+                        footer
+                          text "Your Mac stays awake and keeps sharing. Unlock it at the Mac."
+              // The trackpad: its own screen, with no tab bar, the pad as tall as it can be. The
+              // bar's Back button goes back; a swipe back doesn't. iOS refuses its back swipe (the
+              // edge's, and iOS 26's from anywhere) when the finger lands on a `swiperight` node,
+              // and `touch-action="pan-x"` keeps that node's own swipe from ever starting (its
+              // sideways pan is the platform's), so the screen holds still and the pad gets every
+              // finger, from the screen's edge too.
+              if e.name == "trackpad"
+                column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column" background-color="-exact-grouped-background"
+                  header display="flex" align-items="center" gap=8 padding="8px 16px"
+                    text "Trackpad" role="heading" aria-level=2 flex=1 testId="trackpad-title"
+                    text macTitle testId="trackpad-mac"
+                  column flex=1 min-height=0 gap=10 padding="4px 16px 12px" swiperight=holdStill touch-action="pan-x" testId="trackpad-area"
+                    if pointerError != ""
+                      row gap=8 align-items="center" padding="10px 12px" border-radius=12 background-color="-exact-secondary-grouped-background" testId="pointer-error"
+                        image "symbol:alert" color="-exact-system-orange" aria-hidden=true
+                        text pointerError font="-exact-footnote" flex=1 min-width=0
+                    // The pad: a quiet surface that marks each finger on it.
+                    box flex=1 min-height=200 position="relative" overflow="hidden" border-radius=28 background-color="-exact-secondary-grouped-background" touch-action="none" pointerdown=touchDown pointermove=touchMove pointerup=touchUp role="application" aria-label="Trackpad: one finger moves the pointer, a tap clicks, two fingers scroll" testId="pad"
+                      if touches.length == 0
+                        column position="absolute" inset=0 align-items="center" justify-content="center" gap=10 padding=24 aria-hidden=true
+                          image "symbol:sf/hand.point.up.left" font="-exact-large-title" color="-exact-tertiary-label"
+                          column align-items="center" gap=4
+                            text "Move with one finger · Tap to click" font="-exact-footnote" color="-exact-tertiary-label" text-align="center"
+                            text "Scroll with two · Two‑finger tap right‑clicks" font="-exact-footnote" color="-exact-tertiary-label" text-align="center"
+                      for t in touches key=t.id
+                        box position="absolute" left=`${t.ox - 30}px` top=`${t.oy - 30}px` width=60 height=60 border-radius=30 background-color="-exact-system-blue" opacity=0.18 aria-hidden=true
+                    row gap=3 height=60 flex-shrink=0
+                      button pointerdown=leftDown pointerup=leftUp press=leftPress aria-label="Left Click" testId="left" flex=1 height=60 border-radius="18px 6px 6px 18px" background-color=(holding ? "-exact-tertiary-fill" : "-exact-secondary-grouped-background") border=(holding ? "2px solid -exact-system-blue" : "2px solid transparent")
+                        text (holding ? "Holding" : "Left") font="-exact-subheadline" font-weight=500 color=(holding ? "-exact-system-blue" : "-exact-secondary-label")
+                      button press=rightPress aria-label="Right Click" testId="right" flex=1 height=60 border-radius="6px 18px 18px 6px" background-color="-exact-secondary-grouped-background" border="2px solid transparent"
+                        text "Right" font="-exact-subheadline" font-weight=500 color="-exact-secondary-label"
+                    text "Hold Left and move a finger on the pad to drag." font="-exact-caption1" color="-exact-tertiary-label" text-align="center" testId="trackpad-note"
+              if e.name == "monitor"
+                column navigationKey=`${e.id}` navigationScroll="activity" position="absolute" inset=0 display="flex" flex-direction="column"
+                  header display="flex" flex-wrap="wrap" align-items="center" gap=8 padding="8px 16px"
+                    text "Monitor" role="heading" aria-level=1 flex=1 testId="monitor-title"
+                    text macTitle testId="monitor-mac"
+                    button press=openSettings aria-label="Settings" testId="settings-monitor"
+                      image "symbol:settings"
+                    if shown
+                      input type="search" value=query input=search placeholder="Search Processes" aria-label="Search processes" testId="search" width="100%"
+                  if mustPair
+                    EmptyState(symbol="symbol:chart", title="No Mac Connected", message="Choose your Mac in Settings to see its activity.")
+                      button press=openSettings testId="monitor-connect"
+                        text "Open Settings"
+                  else if activity.status == "offline"
+                    EmptyState(symbol="symbol:alert", title=`Can’t Reach ${macTitle}`, message=activity.message)
+                      button press=retry testId="retry"
+                        text "Try Again"
+                  else if not shown
+                    column flex=1 align-items="center" justify-content="center" gap=12
+                      progress aria-label="Connecting"
+                      text "Connecting…" color="-exact-secondary-label" testId="connecting"
+                  else
+                    list id="activity" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                      if not searching
+                        section
+                          row gap=12 align-items="flex-start" testId="overview"
+                            column flex=1 min-width=0
+                              RingProgress(label="CPU", value=`${round(activity.cpuLoad)}%`, fraction=share(activity.cpuLoad), tint=some("-exact-system-blue"))
+                            column flex=1 min-width=0
+                              RingProgress(label="Memory", value=`${round(activity.memoryShare * 100)}%`, fraction=activity.memoryShare, tint=some("-exact-system-blue"))
+                          row gap=10
+                            Stat(id="overview-processes", label="Processes", value=`${activity.count}`)
+                            Stat(id="overview-pressure", label="Pressure", value=activity.pressure)
+                            if activity.temperature != ""
+                              Stat(id="overview-temperature", label="Temperature", value=activity.temperature)
+                        section
+                          header
+                            text "CPU"
+                          row
+                            column flex=1 min-width=0 gap=10
+                              row align-items="baseline" gap=6 flex-wrap="wrap"
+                                text `${activity.cpuLoad}%` font="-exact-title1" font-weight=700 font-variant-numeric="tabular-nums" testId="cpu-load"
+                                text "in use" color="-exact-secondary-label" flex=1
+                                text `Peak ${activity.cpuPeak}% · Avg ${activity.cpuAverage}%` font="-exact-footnote" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="cpu-peak"
+                              Graph(id="cpu-graph", area=activity.cpuUserArea, under=activity.cpuSystemArea, line=activity.cpuLine, label=`CPU over the last readings: ${activity.cpuUser}% user, ${activity.cpuSystem}% system now`)
+                              row gap=16 flex-wrap="wrap"
+                                Key(id="cpu-user", label="User", value=`${activity.cpuUser}%`, tint="-exact-system-blue", strength=1)
+                                Key(id="cpu-system", label="System", value=`${activity.cpuSystem}%`, tint="-exact-system-blue", strength=0.55)
+                                Key(id="cpu-idle", label="Idle", value=`${activity.cpuIdle}%`, tint="-exact-tertiary-fill", strength=1)
+                          if activity.thermal != ""
+                            row
+                              text "Thermal State" flex=1
+                              Badge(label=activity.thermal, tint=some(levelTint(activity.thermal)))
+                        section
+                          header
+                            text "Memory"
+                          row
+                            column flex=1 min-width=0 gap=10
+                              row align-items="baseline" gap=6 flex-wrap="wrap"
+                                text activity.memoryUsed font="-exact-title1" font-weight=700 font-variant-numeric="tabular-nums" testId="memory-used"
+                                text `of ${activity.memoryTotal}` color="-exact-secondary-label" flex=1 testId="memory-total"
+                                text `Peak ${activity.memoryPeak}%` font="-exact-footnote" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="memory-peak"
+                              Graph(id="memory-graph", area=activity.memoryArea, under="", line=activity.memoryLine, label=`Memory over the last readings: ${activity.memoryUsed} of ${activity.memoryTotal} now`)
+                          row
+                            text "Pressure" flex=1
+                            Badge(label=activity.pressure, tint=some(levelTint(activity.pressure)))
+                          row
+                            text "Cached Files" flex=1
+                            text activity.cached color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="cached"
+                          row
+                            text "Compressed" flex=1
+                            text activity.compressed color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="compressed"
+                          row
+                            text "Swap Used" flex=1
+                            text activity.swap color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="swap"
+                      section
+                        header
+                          text (searching ? `${processesText(activity.matchCount)} Match` : "Processes")
+                        row role="radiogroup" aria-label="Sort processes by"
+                          button role="radio" aria-checked=(sort == "cpu") press=pickSort("cpu") testId="sort-cpu" flex=1
+                            text "CPU"
+                          button role="radio" aria-checked=(sort == "memory") press=pickSort("memory") testId="sort-memory" flex=1
+                            text "Memory"
+                        for p in activity.processes key=p.pid
+                          if p.mine
+                            scroll swipeContent=`open-${p.pid}` swipeTrailing=`quit-${p.pid} force-${p.pid}` display="flex" padding-right=0 overflow-x="scroll" overflow-y="hidden" scrollbar-width="none" scroll-snap-type="x mandatory" testId=`swipe-${p.pid}`
+                              link id=`open-${p.pid}` href=procPath(p) width="100%" flex-shrink=0 scroll-snap-align="start" padding-right=16 box-sizing="border-box" display="flex" align-items="center" gap=8 testId=`proc-${p.pid}`
+                                ProcLine(p=p, byMemory=byMemory)
+                                image "symbol:forward-chevron"
+                              button id=`force-${p.pid}` press=ask(p.pid, (p.group ? p.app : ""), p.name) destructive=true flex-shrink=0 scroll-snap-align="start" testId=`force-${p.pid}`
+                                image "symbol:stop-fill"
+                                text "Force Quit"
+                              button id=`quit-${p.pid}` press=quit(p.pid, (p.group ? p.app : "")) flex-shrink=0 scroll-snap-align="start" testId=`quit-${p.pid}`
+                                image "symbol:close"
+                                text "Quit"
+                          else
+                            link href=procPath(p) testId=`proc-${p.pid}`
+                              ProcLine(p=p, byMemory=byMemory)
+                              image "symbol:forward-chevron"
+                        if searching and activity.processes.length == 0
+                          row
+                            text `No process matches “${query.trim()}”.` color="-exact-secondary-label" testId="no-match"
+                        footer
+                          text `${processesText(activity.count)} on ${activity.name}. Updated ${everyText(interval)}. Swipe a process to quit it.` testId="count"
+              if e.name == "proc" or e.name == "group"
+                column navigationKey=`${e.id}` navigationScroll="detail" position="absolute" inset=0 display="flex" flex-direction="column"
+                  header display="flex" align-items="center" padding="8px 16px"
+                    text (detailShown ? detail.name : (e.name == "group" ? "App" : "Process")) role="heading" aria-level=2 flex=1 testId="detail-title"
+                  if detail.status == "offline"
+                    EmptyState(symbol="symbol:alert", title=`Can’t Reach ${macTitle}`, message=detail.message)
+                  else if not detailShown
+                    column flex=1 align-items="center" justify-content="center" gap=12
+                      progress aria-label="Loading"
+                  else if not detail.found
+                    EmptyState(symbol="symbol:checkmark", title=`${detail.name} Isn’t Running`, message="It quit, or ended on its own.")
+                  else
+                    list id="detail" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                      section
+                        row
+                          column flex=1 min-width=0 gap=14
+                            row gap=14 align-items="center"
+                              ProcIcon(group=detail.group, size=52)
+                              column flex=1 min-width=0 gap=2
+                                text detail.name font="-exact-title3" font-weight=600 testId="detail-name"
+                                text (detail.group ? processesText(detail.count) : `PID ${detail.pid}`) font="-exact-footnote" color="-exact-secondary-label" testId="detail-sub"
+                            row gap=10
+                              Stat(id="detail-cpu", label="CPU", value=`${detail.cpu}%`)
+                              Stat(id="detail-memory", label="Memory", value=detail.memory)
+                      if detail.group
+                        section
+                          header
+                            text "Processes"
+                          for p in detail.processes key=p.pid
+                            if p.mine
+                              scroll swipeContent=`open-${p.pid}` swipeTrailing=`quit-${p.pid} force-${p.pid}` display="flex" padding-right=0 overflow-x="scroll" overflow-y="hidden" scrollbar-width="none" scroll-snap-type="x mandatory" testId=`swipe-${p.pid}`
+                                link id=`open-${p.pid}` href=procPath(p) width="100%" flex-shrink=0 scroll-snap-align="start" padding-right=16 box-sizing="border-box" display="flex" align-items="center" gap=8 testId=`proc-${p.pid}`
+                                  ProcLine(p=p, byMemory=false)
+                                  image "symbol:forward-chevron"
+                                button id=`force-${p.pid}` press=ask(p.pid, "", p.name) destructive=true flex-shrink=0 scroll-snap-align="start" testId=`force-${p.pid}`
+                                  image "symbol:stop-fill"
+                                  text "Force Quit"
+                                button id=`quit-${p.pid}` press=quit(p.pid, "") flex-shrink=0 scroll-snap-align="start" testId=`quit-${p.pid}`
+                                  image "symbol:close"
+                                  text "Quit"
+                            else
+                              link href=procPath(p) testId=`proc-${p.pid}`
+                                ProcLine(p=p, byMemory=false)
+                                image "symbol:forward-chevron"
+                      else
+                        section
+                          header
+                            text "Details"
+                          row
+                            text "Running For" flex=1
+                            text detail.running color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="detail-running"
+                          row
+                            text "CPU Time" flex=1
+                            text detail.cpuTime color="-exact-secondary-label" font-variant-numeric="tabular-nums"
+                          row
+                            text "Threads" flex=1
+                            text detail.threads color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId="detail-threads"
+                          row
+                            text "Real Memory" flex=1
+                            text detail.realMemory color="-exact-secondary-label" font-variant-numeric="tabular-nums"
+                          row
+                            text "User" flex=1
+                            text detail.user color="-exact-secondary-label"
+                          row
+                            text "Parent" flex=1
+                            text detail.parent color="-exact-secondary-label" text-align="end" flex-shrink=1 min-width=0
+                          if detail.path != ""
+                            row
+                              column flex=1 min-width=0 gap=2
+                                text "Path"
+                                text detail.path font="-exact-footnote" color="-exact-secondary-label" testId="detail-path"
+                      section
+                        row
+                          button press=ask(detail.pid, (detail.group ? detail.path : ""), detail.name) destructive=true disabled=(not detail.mine or detail.own) testId="detail-quit" flex=1
+                            text (detail.group ? `Quit ${detail.name}…` : "Quit Process…")
+                        footer
+                          text (detail.own ? "Magnitor quits from its own menu on your Mac." : not detail.mine ? "This belongs to another user or to macOS, so it can’t be quit from here." : "Quit asks it to close, as the Dock does; Force Quit ends it at once.") testId="detail-quit-note"
+              if e.name == "apps"
+                column navigationKey=`${e.id}` navigationScroll="apps-list" position="absolute" inset=0 display="flex" flex-direction="column"
+                  header display="flex" flex-wrap="wrap" align-items="center" gap=8 padding="8px 16px"
+                    text "Apps" role="heading" aria-level=1 flex=1 testId="apps-title"
+                    text macTitle testId="apps-mac"
+                    button press=openSettings aria-label="Settings" testId="settings-apps"
+                      image "symbol:settings"
+                    if controls.ready
+                      input type="search" value=appQuery input=searchApps placeholder="Search Apps" aria-label="Search apps" testId="app-search" width="100%"
+                  if mustPair
+                    EmptyState(symbol="symbol:layers", title="No Mac Connected", message="Choose your Mac in Settings to open its apps from here.")
+                      button press=openSettings testId="apps-connect"
+                        text "Open Settings"
+                  else if controls.status == "off"
+                    EmptyState(symbol="symbol:lock", title="Control Is Off", message=controls.message)
+                      button press=retryControls testId="apps-retry"
+                        text "Try Again"
+                  else if controls.status != ""
+                    EmptyState(symbol="symbol:alert", title=`Can’t Reach ${macTitle}`, message=controls.message)
+                      button press=retryControls testId="apps-retry"
+                        text "Try Again"
+                  else if not controls.ready
+                    column flex=1 align-items="center" justify-content="center" gap=12
+                      progress aria-label="Loading"
+                  else
+                    list id="apps-list" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                      section
+                        for a in appsShown key=a.app
+                          button press=openApp(a.app, a.name) aria-label=`Open ${a.name}` testId=`open-${slug(a.name)}`
+                            row gap=12 align-items="center" flex=1 min-width=0
+                              Monogram(name=a.name)
+                              text a.name flex=1 min-width=0 text-align="start" color="-exact-label"
+                              image "symbol:open-app" color="-exact-tertiary-label" aria-hidden=true
+                        if appsShown.length == 0
+                          row
+                            text `No app matches “${appQuery.trim()}”.` color="-exact-secondary-label" testId="no-app"
+                        footer
+                          text `${appsText(controls.apps.length)} on ${macTitle}. A tap opens one, or brings it to the front.` testId="apps-note"
+              // Settings: the Mac the tabs work on, its code, and the app's own choices. While no
+              // Mac is ready it has no Done and won't swipe away.
+              if isSettings(e.name)
+                column navigationKey=`${e.id}` navigationPresentation="modal" navigationScroll=`settings-${e.name}` closedby=(mustPair ? "none" : "closerequest") position="absolute" inset=0 display="flex" flex-direction="column"
+                  header display="flex" align-items="center" justify-content="space-between" padding="8px 16px"
+                    text "Settings" role="heading" testId="settings-title"
+                    if not mustPair
+                      button id="back" press=back buttonStyle="bordered-prominent" aria-label="Done" testId="settings-done"
+                        image "symbol:checkmark"
+                  list id=`settings-${e.name}` appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                    section
+                      row
+                        column flex=1 min-width=0 align-items="center" gap=8 padding="12px 0"
+                          box width=64 height=64 border-radius=16 background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" aria-hidden=true
+                            image "symbol:sf/laptopcomputer" font="-exact-title1" color="-exact-system-blue"
+                          text (macId == "" ? "Connect to Your Mac" : macTitle) font="-exact-title3" font-weight=600 text-align="center" testId="current-mac"
+                          if macId == ""
+                            text "On your Mac, open Magnitor’s Settings and turn on iPhone › Share Activity with iPhone. Then choose your Mac below." font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="welcome"
+                          else
+                            Badge(label=statusLabel, tint=some(statusTint))
+                    if macId != "" and (code == "" or refused)
+                      section
+                        header
+                          text "Pairing Code"
+                        row
+                          input value=codeDraft input=editCode submit=pair placeholder="ABCD-EFGH" autocapitalize="characters" autocorrect="off" spellcheck=false autofocus=true aria-label="Pairing code" aria-invalid=refused testId="code" flex=1 min-width=0
+                        footer
+                          text (refused ? "That code doesn’t match. Check Magnitor’s Settings on your Mac: a new code there replaces the old one." : "Enter the code Magnitor’s Settings show on your Mac, under iPhone › Share Activity with iPhone. It’s kept on this iPhone.") color=(refused ? "-exact-system-red" : "-exact-secondary-label") testId="code-note"
+                      section
+                        row
+                          button press=pair buttonStyle="filled" disabled=(codeDraft.trim() == "") testId="connect" flex=1
+                            text "Connect"
+                    if activity.status == "offline" and macId != "" and code != ""
+                      section
+                        row gap=10 align-items="flex-start"
+                          image "symbol:alert" color="-exact-system-orange" aria-hidden=true
+                          text activity.message font="-exact-footnote" flex=1 min-width=0 testId="settings-offline"
+                        row
+                          button press=retry testId="settings-retry" flex=1
+                            text "Try Again"
+                    section
+                      header
+                        text "On This Wi‑Fi"
+                      for s in found.services key=s.name
+                        button press=chooseMac(`svc:${s.name}`) aria-label=s.name aria-pressed=(macId == `svc:${s.name}`) testId=`mac-${slug(s.name)}`
+                          row gap=12 align-items="center" flex=1 min-width=0
+                            Tile(symbol="symbol:sf/laptopcomputer")
+                            text s.name flex=1 min-width=0 text-align="start" color="-exact-label"
+                            if codeFor(pairings, `svc:${s.name}`) != "" and macId != `svc:${s.name}`
+                              Badge(label="Paired", tint=none)
+                            if macId == `svc:${s.name}`
+                              image "symbol:checkmark" color="-exact-system-blue" aria-hidden=true
+                      if found.services.length == 0
+                        row gap=10 align-items="center"
+                          if network.available
+                            progress aria-label="Looking for Macs"
+                          text (network.state == "denied" ? "Local Network access is off. Turn it on below, or add your Mac by its address." : network.available ? "Looking for Macs…" : "This device can’t look for Macs. Add yours by its address.") color="-exact-secondary-label" flex=1 testId="none-found"
+                      footer
+                        text "Macs with Magnitor’s Share Activity with iPhone on appear here." testId="macs-note"
+                    section
+                      header
+                        text "By Address"
+                      for a in addresses key=a
+                        button press=chooseMac(`addr:${a}`) delete=forgetAddress(a) aria-label=a aria-pressed=(macId == `addr:${a}`) testId=`addr-${slug(a)}`
+                          row gap=12 align-items="center" flex=1 min-width=0
+                            Tile(symbol="symbol:link")
+                            text a flex=1 min-width=0 text-align="start" color="-exact-label"
+                            if codeFor(pairings, `addr:${a}`) != "" and macId != `addr:${a}`
+                              Badge(label="Paired", tint=none)
+                            if macId == `addr:${a}`
+                              image "symbol:checkmark" color="-exact-system-blue" aria-hidden=true
+                      row gap=8 align-items="center"
+                        input value=addressDraft input=editAddress submit=addAddress placeholder="192.168.1.20" inputmode="url" autocapitalize="none" autocorrect="off" aria-label="Mac’s address" testId="address" flex=1 min-width=0
+                        button press=addAddress buttonStyle="bordered" disabled=(addressDraft.trim() == "") testId="add-address"
+                          text "Add"
+                      footer
+                        text "When your Mac isn’t found on this Wi‑Fi, add the address Magnitor’s Settings show. Swipe an address to remove it." testId="settings-address-note"
+                    section
+                      header
+                        text "Trackpad Speed"
+                      row role="radiogroup" aria-label="Pointer speed"
+                        for v in ["slow", "normal", "fast"] key=v
+                          button role="radio" aria-checked=(padSpeed == v) press=pickSpeed(v) testId=`speed-${v}` flex=1
+                            text (v == "slow" ? "Slow" : v == "fast" ? "Fast" : "Normal")
+                    section
+                      header
+                        text "Updates"
+                      row role="radiogroup" aria-label="Read the Mac every"
+                        for s in [2, 3, 5, 10] key=s
+                          button role="radio" aria-checked=(interval == s) press=setInterval(s) testId=`every-${s}` flex=1
+                            text `${s} s`
+                      footer
+                        text `While Monitor shows, the Mac is read ${everyText(interval)}. Its graphs show the last 40 readings.` testId="interval-note"
+                    section
+                      header
+                        text "Local Network"
+                      row
+                        text "Access" flex=1
+                        text (network.state == "denied" ? "Off" : network.available ? "On" : "Unavailable") color="-exact-secondary-label" testId="network-state"
+                      row
+                        button press=openSystemSettings testId="settings-open-system"
+                          text "Open iPhone Settings"
+                    if code != ""
+                      section
+                        row
+                          button press=signOut destructive=true testId="sign-out" flex=1
+                            text "Forget Pairing Code"
+                        footer
+                          text `${macTitle} asks for its code again next time.`
+      dialog id="control-failed" role="alertdialog" aria-label=controlTitle
+        text controlError testId="control-error"
+        button commandfor="control-failed" command="close" testId="control-ok"
+          text "OK"
+      dialog id="end-ask" role="alertdialog" aria-label=`Quit ${aimName}?`
+        text "Force Quit ends it at once and loses anything it hasn’t saved."
+        button press=end(false) commandfor="end-ask" command="close" testId="end-quit"
+          text "Quit"
+        button press=end(true) destructive=true commandfor="end-ask" command="close" testId="end-force"
+          text "Force Quit"
+        button commandfor="end-ask" command="close" testId="end-cancel"
+          text "Cancel"
+      dialog id="end-failed" role="alertdialog" aria-label="Couldn’t Quit"
+        text endError testId="end-error"
+        button commandfor="end-failed" command="close" testId="end-ok"
+          text "OK"
+      // The trackpad hides the tab bar, for room on the pad.
+      row role="tablist" display=(here == "trackpad" ? "none" : "flex") testId="tabs"
+        button role="tab" aria-controls="panel-control" aria-selected=(nav.tab == "control") press=pick("control") testId="tab-control" flex=1
+          image "symbol:sf/hand.point.up.left"
+          text "Control"
+        button role="tab" aria-controls="panel-monitor" aria-selected=(nav.tab == "monitor") press=pick("monitor") testId="tab-monitor" flex=1
+          image "symbol:sf/gauge.with.dots.needle.33percent"
+          text "Monitor"
+        button role="tab" aria-controls="panel-apps" aria-selected=(nav.tab == "apps") press=pick("apps") testId="tab-apps" flex=1
+          image "symbol:sf/square.grid.2x2"
+          text "Apps"
+
+// A graph of the last readings: a band filled with the accent fading down, an optional band
+// under it (CPU's system share, solid and lighter), and the line along its top. The box is
+// stretched to the row's width; the lines keep their width.
+component Graph
+  props
+    id: string
+    area: string
+    under: string
+    line: string
+    label: string
+  view
+    svg width="100%" height=104 viewBox="0 0 100 40" preserveAspectRatio="none" role="img" aria-label=label testId=id
+      defs
+        linearGradient id=`${id}-fade` x1=0 y1=0 x2=0 y2=1
+          stop offset=0 stop-color="-exact-system-blue" stop-opacity=0.38
+          stop offset=1 stop-color="-exact-system-blue" stop-opacity=0.04
+      for g in [10, 20, 30] key=g
+        line x1=0 y1=g x2=100 y2=g stroke="-exact-separator" stroke-width=1 stroke-dasharray="2 3" vector-effect="non-scaling-stroke"
+      path d=area fill=`url(#${id}-fade)`
+      if under != ""
+        path d=under fill="-exact-system-blue" fill-opacity=0.55
+      path d=line fill="none" stroke="-exact-system-blue" stroke-width=2 stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"
+
+// A graph's key: a dot in its colour, what it is, and its value.
+component Key
+  props
+    id: string
+    label: string
+    value: string
+    tint: string
+    strength: number
+  view
+    row gap=6 align-items="center"
+      box width=8 height=8 border-radius=4 background-color=tint opacity=strength aria-hidden=true
+      text label font="-exact-footnote" color="-exact-secondary-label"
+      text value font="-exact-footnote" font-weight=600 font-variant-numeric="tabular-nums" testId=id
+
+// A symbol on a tinted tile, at the start of a row.
+component Tile
+  props
+    symbol: string
+  view
+    box width=34 height=34 border-radius=9 background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
+      image symbol color="-exact-system-blue"
+
+// An app's first letter on a tinted tile, where its icon would be.
+component Monogram
+  props
+    name: string
+  view
+    box width="2.125rem" height="2.125rem" border-radius=9 background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
+      text name.slice(0, 1).toUpperCase() font="-exact-headline" color="-exact-system-blue"
+
+// A row's bar: its share of the busiest row's, in the accent over a faint track.
+component Meter
+  props
+    fraction: number
+  view
+    box height=4 border-radius=2 background-color="-exact-tertiary-fill" overflow="hidden" aria-hidden=true
+      box height=4 border-radius=2 width=`${round(max(0.02, fraction) * 100)}%` background-color="-exact-system-blue"
+
+// A process or an app, as its rows and its detail draw it: a symbol on a tinted tile.
+component ProcIcon
+  props
+    group: bool
+    size: number
+  view
+    box width=size height=size border-radius=(size / 4) background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
+      image (group ? "symbol:layers" : "symbol:package") color="-exact-system-blue" font=(size > 40 ? "-exact-title2" : "-exact-body")
+
+// A row's content: what it is, its bar, and its two numbers, the sorted one first.
+component ProcLine
+  props
+    p: Proc
+    byMemory: bool
+  view
+    row gap=12 align-items="center" flex=1 min-width=0
+      ProcIcon(group=p.group, size=34)
+      column flex=1 min-width=0 gap=5
+        text p.name font-weight=500 testId=`proc-${p.pid}-name`
+        Meter(fraction=p.bar)
+        text p.detail font="-exact-footnote" color="-exact-secondary-label"
+      column align-items="flex-end" gap=2 flex-shrink=0
+        text (byMemory ? p.memory : `${p.cpu}%`) font-weight=600 font-variant-numeric="tabular-nums" testId=`proc-${p.pid}-${byMemory ? "memory" : "cpu"}`
+        text (byMemory ? `${p.cpu}%` : p.memory) font="-exact-footnote" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`proc-${p.pid}-${byMemory ? "cpu" : "memory"}`
+
+// A labelled number on a tile, for the overview and a process's detail.
+component Stat
+  props
+    id: string
+    label: string
+    value: string
+  view
+    column flex=1 min-width=0 gap=2 padding=12 border-radius=12 background-color="-exact-tertiary-fill"
+      text label font="-exact-footnote" color="-exact-secondary-label"
+      text value font="-exact-title3" font-weight=600 font-variant-numeric="tabular-nums" testId=id

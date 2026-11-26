@@ -22,6 +22,9 @@ export const grants = [
   'fs.read doc:/',
   'device.notifications purpose.notifications',
   'device.global-shortcuts',
+  // Sharing with Magnitor Remote: the Rust crate announces this Mac by Bonjour (data/src/share.rs).
+  'device.local-network purpose.localNetwork',
+  'net.dns-sd _magnitor._tcp',
 ].join('\n');
 
 // Finder's decimal units: 511 KB, 211.2 MB, 2 GB (data/src/lib.rs's `format_bytes`).

@@ -14,7 +14,9 @@
 // keyboard shortcut that opens the popover from any app, what the menu bar item shows, the
 // desktop widget (app.json's `widgets`, drawn by `VitalsWidget` from the reading `saveWidget`
 // keeps) and alerts, a notification when the CPU, memory or free disk space crosses a limit, or
-// one process stays busy or its memory keeps growing (`unusual`, the Rust crate's).
+// one process stays busy or its memory keeps growing (`unusual`, the Rust crate's), and sharing
+// Activity Monitor with Magnitor Remote on an iPhone on the same network (`share`, the Rust
+// crate's, behind a pairing code).
 // Settings are `persist` states, which the two windows share; the main window alone watches
 // the machine (`vitals`, the Rust crate's) and holds the shortcut.
 use globalShortcut, checkGlobalShortcut, globalshortcut, GlobalShortcut, GlobalShortcutCheck, GlobalShortcutEvent from "@exact/global-shortcuts"
@@ -275,6 +277,20 @@ shape UnusualProc
 
 shape Unusual
   findings: UnusualProc[]
+  error: string
+
+// Sharing with an iPhone (data/src/share.rs): whether the server runs, its port, and the address
+// a phone can be given ("192.168.1.20:47820"; "" off the network).
+shape Sharing
+  on: bool
+  port: number
+  address: string
+  error: string
+  // Whether Magnitor has Accessibility access, which the iPhone's trackpad needs.
+  pointer: bool
+
+shape ShareCode
+  code: string
   error: string
 
 // Which window this session draws: "main", or "settings" for the Settings window.
@@ -665,7 +681,21 @@ component Magnitor
   state procAt = 0
   state procAlerted: string[] = []
   derive procWatch = alertsOn and (procCpuLimit > 0 or procGrowLimit > 0)
-  derive watching = isMain and (trayShow != "icon" or alertsOn or widgetOn)
+  // Sharing with Magnitor Remote on an iPhone: the main window runs the server; its address and
+  // any error are kept for Settings, a window of its own, to show.
+  state shareOn = false persist
+  state shareCode = "" persist
+  state shareAddress = "" persist
+  state shareError = "" persist
+  // Whether the phone may also act on this Mac: its volume, its apps, its display and its lock.
+  state shareControl = false persist
+  // Whether Magnitor has the Accessibility access the phone's trackpad needs, as the main window
+  // last read it.
+  state sharePointer = true persist
+  // Asked again each minute (`diskPulse`), so a change of network shows a new address.
+  resource sharing = share(shareOn, shareCode, diskPulse, shareControl) when isMain as shape Sharing else empty()
+  mutation codeMade as shape ShareCode then afterCode
+  derive watching = isMain and (trayShow != "icon" or alertsOn or widgetOn or shareOn)
   resource unusual = unusual(procPulse, procAt, procCpuLimit, procBusyFor, procGrowLimit) when watching and procWatch as shape Unusual else empty() transient
   derive procNext = unusual.findings.filter(f => not procAlerted.includes(f.id))
   // Every two seconds while the menu bar shows the load; five otherwise (Activity Monitor reads
@@ -685,6 +715,7 @@ component Magnitor
   // The menu bar item's title and tooltip; with the load shown it is all AppKit draws.
   derive trayLabel = trayShow == "icon" ? "Magnitor" : trayTitle(trayShow, vitals)
   derive alertsNote = not alertsOn ? "Magnitor checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Magnitor are off. Turn them on in System Settings › Notifications › Magnitor." : `Magnitor tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.${procWatch ? " It also tells you when one of your apps or processes stays busy, or its memory keeps growing for ten minutes." : ""}${cleanRemind > 0 ? ` Once a month, it reminds you when developer files you can clean up pass ${cleanRemind} GB.` : ""}`
+  derive shareNote = not shareOn ? "Magnitor Remote on your iPhone shows this Mac’s Activity Monitor while both are on the same Wi‑Fi, and can quit your apps there." : shareError != "" ? shareError : `In Magnitor Remote, choose this Mac and enter the code. A new code signs out phones that used the old one.${shareControl ? " With control allowed, the phone can also move the pointer, change the volume, open apps, turn the display off and lock the screen." : ""} The connection isn’t encrypted: use it on a network you trust.`
   derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Magnitor from any app." : `Press ${chordText(hotkey, tray)} in any app to open Magnitor.`
   derive groups = ["cache", "device"].filter(g => usage.slices.filter(s => s.group == g).length > 0)
   derive measuring = not current(usage)
@@ -776,6 +807,25 @@ component Magnitor
     widgetOn = on
   action setWidgetShows(v: string)
     widgetShows = v
+  action setShareOn(on: bool)
+    shareOn = on
+    if on and shareCode == ""
+      send codeMade = newShareCode()
+  action setShareControl(on: bool)
+    shareControl = on
+  action openAccessibility
+    openURL("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+  action makeShareCode
+    send codeMade = newShareCode()
+  action afterCode
+    match codeMade
+      case some(c)
+        if c.code != ""
+          shareCode = c.code
+      case none
+        shareCode = shareCode
+  action copyShareCode
+    copyText(shareCode)
   action setAlertsOn(on: bool)
     alertsOn = on
     if on and notifying.state == "prompt"
@@ -876,6 +926,12 @@ component Magnitor
       else if epoch - remindCheckedAt >= 2592000000
         reminderScan = true
         generation = generation + 1
+    if sharing.address != shareAddress
+      shareAddress = sharing.address
+    if sharing.error != shareError
+      shareError = sharing.error
+    if sharing.on and sharing.pointer != sharePointer
+      sharePointer = sharing.pointer
     if widgetOn and vitals.pressure != "" and (widgetAt == 0 or now - widgetAt >= 60000 or widgetShown != widgetShows)
       send widgetSaved = saveWidget(widgetShows, round(vitals.cpu), round(vitals.memory), vitals.pressure, disk.free, disk.size > 0 ? disk.freeBytes / disk.size : 0, clock.epochAtZero + now)
       widgetAt = now
@@ -1854,6 +1910,36 @@ component Magnitor
                       option sustainText(n) value=`${n}`
                 footer
                   text "How often the process list reads your Mac while it’s open. Less often uses less CPU." testId="refresh-note"
+              section
+                header
+                  text "iPhone"
+                row
+                  text "Share Activity with iPhone"
+                  input type="checkbox" switch checked=shareOn change=setShareOn aria-label="Share Activity with iPhone" testId="share-on"
+                if shareOn and shareCode != ""
+                  row
+                    text "Pairing Code" flex=1
+                    text shareCode font-variant-numeric="tabular-nums" testId="share-code"
+                    button press=copyShareCode aria-label="Copy Code" testId="share-copy"
+                      image "symbol:sf/doc.on.doc"
+                  row
+                    text "Address" flex=1
+                    text (shareAddress != "" ? shareAddress : "Not on a network") color="-exact-secondary-label" testId="share-address"
+                  row
+                    button press=makeShareCode testId="share-new-code"
+                      text "New Code"
+                  row
+                    text "Allow Control from iPhone"
+                    input type="checkbox" switch checked=shareControl change=setShareControl aria-label="Allow Control from iPhone" testId="share-control"
+                  if shareControl and not sharePointer
+                    row
+                      column flex=1 min-width=0 gap=2
+                        text "The trackpad needs Accessibility access"
+                        text "Allow Magnitor in Privacy & Security › Accessibility. Magnitor checks again within a minute." font="-exact-footnote" color="-exact-secondary-label" testId="share-pointer-note"
+                      button press=openAccessibility testId="share-accessibility"
+                        text "Open Settings"
+                footer
+                  text shareNote testId="share-note"
               section
                 header
                   text "Desktop Widget"

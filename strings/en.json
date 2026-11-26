@@ -1,3 +1,4 @@
 {
-  "purpose.notifications": "Magnitor tells you when your Mac's CPU, memory or disk space crosses the limits you set."
+  "purpose.notifications": "Magnitor tells you when your Mac's CPU, memory or disk space crosses the limits you set.",
+  "purpose.localNetwork": "Magnitor shares your Mac’s Activity Monitor with Magnitor Remote on your iPhone, on the same Wi‑Fi, when you turn sharing on."
 }

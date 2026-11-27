@@ -18,6 +18,13 @@ crate-type = ["rlib"]
 exact-runner.workspace = true
 # Docker's Engine API and simctl answer JSON; already built for exact-runner.
 serde_json = "1.0"
+# The iPhone's pairing proof and its key's id are SHA-256 (`guard`), on every target.
+sha2 = "0.10"
+
+# The iPhone's requests are signed with P-256 keys (`guard`); ring, already built for rustls,
+# checks them. The web build (wasm) serves no iPhone, and ring doesn't build there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ring = "0.17"
 
 # `build.rs` writes the view's shapes as Rust structs (`contract rust`).
 [build-dependencies]

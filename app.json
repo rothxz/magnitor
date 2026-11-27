@@ -9,7 +9,8 @@
       },
       "activationPolicy": "accessory"
     },
-    "linux": {}
+    "linux": {},
+    "android": {}
   },
   "deploy": {
     "store": {

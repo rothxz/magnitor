@@ -18,6 +18,7 @@
         "ipad"
       ]
     },
+    "android": {},
     "macos": {
       "minimumOS": "14.0",
       "window": {
@@ -30,6 +31,7 @@
     "store": {
       "web": "0",
       "ios": "0",
+      "android": "0",
       "macos": "0"
     }
   },
@@ -39,6 +41,12 @@
       "sizes": "1024x1024",
       "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "assets/icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

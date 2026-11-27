@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 1024 1024">
+  <!-- Magnitor Remote's Android adaptive icon: icon.svg's artwork with the M at the centre.
+       Exact sets this image at 82.5 dp on Android's 108 dp layer, over the colour of its top-left
+       pixel, so the launcher shows about its middle 87% (a radius of 447 here) and every mask
+       shape (circle, squircle, rounded square, teardrop) keeps the centred circle of 80%
+       diameter (a radius of 410). The M, its dot and both of the ping's rings lie inside that
+       circle; the ground, the grid and the line's tail run to the edges.
+       Rendered at 512 px to assets/icon-maskable.png by `bun tools/icon.ts`: Android takes a
+       maskable icon of at least 432 px, and iOS and macOS, which want 1024, pass it over for
+       icon-1024.png (Exact's pickIcon). -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60A5FA"/>
+      <stop offset="0.5" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.3" cy="0.15" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="lineShadow" filterUnits="userSpaceOnUse" x="-400" y="-400" width="1800" height="1800">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#body)"/>
+  <rect width="1024" height="1024" fill="url(#sheen)"/>
+
+  <!-- Magnitor's tile at 0.92, the M's centre (512, 464: its feet at 300 and 724, its peaks at
+       300 and its foot line at 628) at the square's. The outer ring, the farthest part, ends 410
+       from the centre: (804, 628) is 335 from the M's centre, and the ring's edge 111 more. -->
+  <g transform="matrix(0.92 0 0 0.92 40.96 85.12)">
+    <g stroke="#E5E7EB" stroke-width="4" opacity="0.22">
+      <path d="M-300 -65H1400M-300 100H1400M-300 265H1400M-300 430H1400M-300 595H1400M-300 760H1400M-300 925H1400M-300 1090H1400"/>
+      <path d="M-65 -300V1400M100 -300V1400M265 -300V1400M430 -300V1400M595 -300V1400M760 -300V1400M925 -300V1400M1090 -300V1400"/>
+    </g>
+
+    <!-- the heartbeat as an M, its tail off the left edge as icon.svg's is -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-200 628H300L372 300L512 540L652 300L724 628H770"
+            stroke="#0B1B4D" stroke-width="62" opacity="0.35" filter="url(#lineShadow)" transform="translate(0 14)"/>
+      <path d="M-200 628H300L372 300L512 540L652 300L724 628H770"
+            stroke="#FFFFFF" stroke-width="62"/>
+    </g>
+
+    <circle cx="804" cy="628" r="70" fill="none" stroke="#FFFFFF" stroke-width="10" opacity="0.35"/>
+    <circle cx="804" cy="628" r="108" fill="none" stroke="#FFFFFF" stroke-width="6" opacity="0.15"/>
+    <circle cx="804" cy="628" r="38" fill="#FFFFFF"/>
+  </g>
+</svg>

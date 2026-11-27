@@ -1,0 +1,54 @@
+# Magnitor Remote's Android App Bundle (profile exact) or APK (profile exact-apk) on an EAS worker
+# (Exact's recipes/eas-android.md): Exact checked out at EXACT_REF beside the repository, then
+# `exact.mjs android --bundle` or `--release --no-install`, signed with the upload keystore EAS
+# keeps for the app (.ci/sign-android.sh).
+build:
+  name: Exact Android
+  steps:
+    - eas/checkout
+    - run:
+        name: Prepare Exact
+        shell: /bin/sh
+        command: |
+          set -eu
+          sh .ci/prepare-native.sh android
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platforms;android-37.2' 'build-tools;37.0.0' 'ndk;27.1.12297006'
+    - eas/install_node_modules
+    - eas/resolve_build_config
+    - run:
+        name: Bundle
+        id: bundle
+        outputs: [artifact]
+        shell: /bin/sh
+        command: |
+          set -eu
+          # The upload keystore EAS keeps for this app, as JSON in a file the step alone reads
+          # (a quoted heredoc: the shell expands nothing in it, and nothing is printed).
+          EAS_CREDENTIALS_DIR=$(mktemp -d)
+          cat > "$EAS_CREDENTIALS_DIR/build-credentials.json" <<'EAS_BUILD_CREDENTIALS'
+          ${ eas.job.secrets.buildCredentials }
+          EAS_BUILD_CREDENTIALS
+          export EAS_BUILD_CREDENTIALS_FILE="$EAS_CREDENTIALS_DIR/build-credentials.json"
+          bun "$EXACT/scripts/exact.mjs" setup --check --platform android
+          export EXACT_BUILD_NUMBER="${ eas.job.version.versionCode }"
+          . .ci/sign-android.sh
+          # The exact-apk profile sets EXACT_ANDROID_OUTPUT=apk: an APK to install directly,
+          # signed with the same upload key so each build installs over the last.
+          if [ "${EXACT_ANDROID_OUTPUT:-aab}" = apk ]; then
+            export EXACT_UPDATE_TRUST=production
+            bun exact.mjs android --release --no-install --json > artifact.json
+            out="$PWD/target/android/app/outputs/apk/release/app-release.apk"
+          else
+            bun exact.mjs android --bundle --json > artifact.json
+            out="$PWD/target/android/app/outputs/bundle/release/app-release.aab"
+          fi
+          rm -rf "$EAS_CREDENTIALS_DIR"
+          test -f "$out"
+          # Its full path: the upload step doesn't run in remote/, where the artifact is.
+          set-output artifact "$out"
+    - eas/upload_artifact:
+        inputs:
+          type: application-archive
+          path: ${ steps.bundle.artifact }

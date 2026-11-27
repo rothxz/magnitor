@@ -70,6 +70,21 @@ pub fn apps() -> Vec<App> {
     apps_in(&roots())
 }
 
+/// When an app's bundle last changed (its `Info.plist`, else the bundle), in seconds since 1970,
+/// or 0 when unknown: the phone keeps an app's icon until this changes.
+pub fn stamp(path: &str) -> u64 {
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let bundle = Path::new(path);
+    modified(&bundle.join("Contents/Info.plist"))
+        .or_else(|| modified(bundle))
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The side, in pixels, of the icons `icons` draws: sharp at the phone's 60-point tile on a 2×
+/// screen, and small enough to send a dozen at once.
+pub const ICON_SIZE: u32 = 144;
+
 /// What a control did: whether it worked, and what to tell the phone when it didn't.
 pub type Done = Result<String, String>;
 
@@ -117,6 +132,48 @@ mod mac {
         }
     }
 
+    /// Draws each bundle's icon as Finder does (`NSWorkspace`'s `iconForFile:`, by JavaScript for
+    /// Automation, so no AppKit is linked here) into an `ICON_SIZE` square PNG: one base64 line
+    /// per path, in order, "" for one it couldn't draw.
+    const ICON_SCRIPT: &str = r#"ObjC.import('AppKit');
+function run(argv) {
+  const size = Number(argv[0]);
+  return argv.slice(1).map((p) => {
+    try {
+      const img = $.NSWorkspace.sharedWorkspace.iconForFile(p);
+      const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, size, size, 8, 4, true, false, $.NSDeviceRGBColorSpace, 0, 0);
+      $.NSGraphicsContext.saveGraphicsState;
+      $.NSGraphicsContext.setCurrentContext($.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep));
+      img.drawInRectFromRectOperationFraction($.NSMakeRect(0, 0, size, size), $.NSZeroRect, $.NSCompositingOperationSourceOver, 1);
+      $.NSGraphicsContext.restoreGraphicsState;
+      return rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $()).base64EncodedStringWithOptions(0).js;
+    } catch (e) {
+      return '';
+    }
+  }).join('\n');
+}"#;
+
+    pub fn icons(paths: &[&str]) -> Vec<String> {
+        let mut drawn = vec![String::new(); paths.len()];
+        if paths.is_empty() {
+            return drawn;
+        }
+        let size = ICON_SIZE.to_string();
+        // A bundle that is a link (Safari's, into the system's cryptex) is drawn as its target,
+        // without Finder's alias arrow, as Launchpad draws it.
+        let targets: Vec<String> = paths
+            .iter()
+            .map(|p| std::fs::canonicalize(p).map_or_else(|_| (*p).to_owned(), |t| t.to_string_lossy().into_owned()))
+            .collect();
+        let out = Command::new("/usr/bin/osascript").args(["-l", "JavaScript", "-e", ICON_SCRIPT, &size]).args(&targets).output();
+        if let Some(out) = out.ok().filter(|o| o.status.success()) {
+            for (slot, line) in drawn.iter_mut().zip(String::from_utf8_lossy(&out.stdout).split('\n')) {
+                *slot = line.trim().to_owned();
+            }
+        }
+        drawn
+    }
+
     pub fn display_off() -> Done {
         match Command::new("/usr/bin/pmset").arg("displaysleepnow").status() {
             Ok(s) if s.success() => Ok("The display is off.".into()),
@@ -153,12 +210,15 @@ mod mac {
 }
 
 #[cfg(target_os = "macos")]
-pub use mac::{display_off, lock, open, set_muted, set_volume, volume};
+pub use mac::{display_off, icons, lock, open, set_muted, set_volume, volume};
 
 #[cfg(not(target_os = "macos"))]
 mod other {
     use super::*;
     const ONLY: &str = "Only a Mac can be controlled from your iPhone.";
+    pub fn icons(paths: &[&str]) -> Vec<String> {
+        vec![String::new(); paths.len()]
+    }
     pub fn volume() -> Option<Volume> {
         None
     }
@@ -180,7 +240,7 @@ mod other {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub use other::{display_off, lock, open, set_muted, set_volume, volume};
+pub use other::{display_off, icons, lock, open, set_muted, set_volume, volume};
 
 #[cfg(test)]
 mod tests {
@@ -215,5 +275,16 @@ mod tests {
         let apps = [App { name: "Notes".into(), path: "/System/Applications/Notes.app".into() }];
         assert!(open("/tmp/run-me.command", &apps).is_err());
         assert!(open("/System/Applications/Calculator.app", &apps).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn draws_an_apps_icon_as_a_png() {
+        let drawn = icons(&["/System/Applications/Calculator.app", "/no/such.app"]);
+        assert_eq!(drawn.len(), 2);
+        // A PNG's signature, base64: 89 50 4E 47 0D 0A 1A 0A.
+        assert!(drawn[0].starts_with("iVBORw0KGgo"), "{}", &drawn[0][..drawn[0].len().min(40)]);
+        assert!(stamp("/System/Applications/Calculator.app") > 0);
+        assert_eq!(stamp("/no/such.app"), 0);
     }
 }

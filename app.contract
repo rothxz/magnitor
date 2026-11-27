@@ -288,6 +288,18 @@ shape Sharing
   error: string
   // Whether Magnitor has Accessibility access, which the iPhone's trackpad needs.
   pointer: bool
+  // Whether the pairing code still works: it works once, for ten minutes.
+  codeValid: bool
+  // A phone that proved the code, waiting to be allowed: its id, name, the six digits it
+  // shows, and its line for `shareDevices` (data/src/guard.rs's `Device::line`); "" for none.
+  pendingId: string
+  pendingName: string
+  pendingCheck: string
+  pendingLine: string
+  // The phone that acted on the Mac in the last fifteen seconds, by name; "" for none.
+  controller: string
+  // Seconds since control was allowed or last used; 0 while it's off.
+  controlIdle: number
 
 shape ShareCode
   code: string
@@ -342,6 +354,10 @@ shape VitalsWidgetProps
 fn sliceColor(id: string): string = id == "caches" ? "-exact-system-orange" : id == "derived" ? "-exact-system-red" : id == "documents" ? "-exact-system-blue" : id == "downloads" ? "-exact-system-teal" : id == "desktop" ? "-exact-system-indigo" : id == "pictures" ? "-exact-system-green" : id == "movies" ? "-exact-system-purple" : "-exact-system-yellow"
 
 // A share as Finder words it: 9.3%, <0.1%.
+// A paired phone as `shareDevices` keeps it: "<id> <x> <y> <name>" (data/src/guard.rs's `Device::line`).
+fn deviceId(line: string): string = line.slice(0, line.indexOf(" "))
+fn deviceName(line: string): string = line.split(" ").slice(3).join(" ")
+fn minutesText(n: number): string = n == 60 ? "1 hour" : `${n} ${n == 1 ? "minute" : "minutes"}`
 fn percentText(share: number): string = share > 0 and share < 0.001 ? "<0.1%" : `${round(share * 1000) / 10}%`
 
 // An item by the name of the app that keeps it, when `names` (one per item, in order, from
@@ -692,8 +708,27 @@ component Magnitor
   // Whether Magnitor has the Accessibility access the phone's trackpad needs, as the main window
   // last read it.
   state sharePointer = true persist
-  // Asked again each minute (`diskPulse`), so a change of network shows a new address.
-  resource sharing = share(shareOn, shareCode, diskPulse, shareControl) when isMain as shape Sharing else empty()
+  // When the code was made (milliseconds since 1970), and whether it still works, as the main
+  // window last read it: a code works once, for ten minutes.
+  state shareCodeAt = 0 persist
+  state shareCodeValid = false persist
+  // The phones allowed (`deviceId`, `deviceName`), and the last one refused, by id.
+  state shareDevices: string[] = [] persist
+  state shareDenied = "" persist
+  // The phone waiting to be allowed, as the main window last read it: its id, name, the digits
+  // it shows, and its line for `shareDevices`.
+  state sharePendingId = "" persist
+  state sharePendingName = "" persist
+  state sharePendingCheck = "" persist
+  state sharePendingLine = "" persist
+  // The phone acting on the Mac now, and when a notification last said so (`performanceNow`).
+  state shareController = "" persist
+  state shareToldAt = -600000
+  // Minutes control may go unused before it turns itself off; 0 for never.
+  state shareControlOff = 30 persist
+  // Asked again each pulse, so a phone asking to pair, or acting, shows within seconds, and a
+  // change of network shows a new address.
+  resource sharing = share(shareOn, shareCode, shareCodeAt, pulse, shareControl, shareDevices, shareDenied) when isMain as shape Sharing else empty()
   mutation codeMade as shape ShareCode then afterCode
   derive watching = isMain and (trayShow != "icon" or alertsOn or widgetOn or shareOn)
   resource unusual = unusual(procPulse, procAt, procCpuLimit, procBusyFor, procGrowLimit) when watching and procWatch as shape Unusual else empty() transient
@@ -715,7 +750,7 @@ component Magnitor
   // The menu bar item's title and tooltip; with the load shown it is all AppKit draws.
   derive trayLabel = trayShow == "icon" ? "Magnitor" : trayTitle(trayShow, vitals)
   derive alertsNote = not alertsOn ? "Magnitor checks your Mac every few seconds while it runs, and tells you when it crosses a limit." : notifying.state == "denied" ? "Notifications for Magnitor are off. Turn them on in System Settings › Notifications › Magnitor." : `Magnitor tells you when CPU or memory stays over its limit for ${sustainText(sustain)}, or when free disk space drops below its limit.${procWatch ? " It also tells you when one of your apps or processes stays busy, or its memory keeps growing for ten minutes." : ""}${cleanRemind > 0 ? ` Once a month, it reminds you when developer files you can clean up pass ${cleanRemind} GB.` : ""}`
-  derive shareNote = not shareOn ? "Magnitor Remote on your iPhone shows this Mac’s Activity Monitor while both are on the same Wi‑Fi, and can quit your apps there." : shareError != "" ? shareError : `In Magnitor Remote, choose this Mac and enter the code. A new code signs out phones that used the old one.${shareControl ? " With control allowed, the phone can also move the pointer, change the volume, open apps, turn the display off and lock the screen." : ""} The connection isn’t encrypted: use it on a network you trust.`
+  derive shareNote = not shareOn ? "Magnitor Remote on your iPhone shows this Mac’s Activity Monitor while both are on the same Wi‑Fi, and can quit your apps there." : shareError != "" ? shareError : `${shareCode != "" and shareCodeValid ? "In Magnitor Remote, choose this Mac and enter the code. It works once, for ten minutes; then allow the iPhone here." : "Pair an iPhone to make a code for it."}${shareControl ? " With control allowed, a paired iPhone can also move the pointer, change the volume, open apps, turn the display off and lock the screen." : ""} Each iPhone signs its requests with a key of its own, and only devices on your local network are answered. What Activity Monitor shows isn’t encrypted on the way: use it on a network you trust.`
   derive hotkeyFooter = hotkeyNote != "" ? hotkeyNote : recording ? "Press the keys together. Escape cancels." : hotkeyProblem != "" ? hotkeyProblem : hotkey == "" ? "Choose keys that open Magnitor from any app." : `Press ${chordText(hotkey, tray)} in any app to open Magnitor.`
   derive groups = ["cache", "device"].filter(g => usage.slices.filter(s => s.group == g).length > 0)
   derive measuring = not current(usage)
@@ -809,10 +844,40 @@ component Magnitor
     widgetShows = v
   action setShareOn(on: bool)
     shareOn = on
-    if on and shareCode == ""
+    if on and shareDevices.length == 0
       send codeMade = newShareCode()
+    if not on
+      sharePendingId = ""
+      sharePendingName = ""
+      sharePendingCheck = ""
+      sharePendingLine = ""
+      shareController = ""
   action setShareControl(on: bool)
     shareControl = on
+  action setShareControlOff(v: string)
+    shareControlOff = number(v)
+  // Allowed: its line joins the list (replacing any with its id), and it stops waiting.
+  action allowDevice
+    if sharePendingLine != ""
+      shareDevices = shareDevices.filter(d => deviceId(d) != sharePendingId).concat([sharePendingLine])
+    sharePendingId = ""
+    sharePendingName = ""
+    sharePendingCheck = ""
+    sharePendingLine = ""
+  action denyDevice
+    shareDenied = sharePendingId
+    sharePendingId = ""
+    sharePendingName = ""
+    sharePendingCheck = ""
+    sharePendingLine = ""
+  // A removed phone is answered no more; it needs a new code to pair again.
+  action removeDevice(line: string)
+    shareDevices = shareDevices.filter(d => d != line)
+  // The popover's Stop Sharing, while a phone is acting on the Mac.
+  action stopSharing
+    shareOn = false
+    shareControl = false
+    shareController = ""
   action openAccessibility
     openURL("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
   action makeShareCode
@@ -822,6 +887,8 @@ component Magnitor
       case some(c)
         if c.code != ""
           shareCode = c.code
+          shareCodeAt = clock.epochAtZero + performanceNow()
+          shareCodeValid = true
       case none
         shareCode = shareCode
   action copyShareCode
@@ -932,6 +999,28 @@ component Magnitor
       shareError = sharing.error
     if sharing.on and sharing.pointer != sharePointer
       sharePointer = sharing.pointer
+    // What the server learned since: a code used up or expired, a phone asking to be allowed, one
+    // acting on the Mac, and control left unused too long.
+    if shareOn and current(sharing) and sharing.on
+      if sharing.codeValid != shareCodeValid
+        shareCodeValid = sharing.codeValid
+      if shareCode != "" and not sharing.codeValid
+        shareCode = ""
+      if sharing.pendingId != sharePendingId
+        if sharing.pendingId != ""
+          showNotification(title=`${sharing.pendingName} wants to pair`, body=`Allow it in Magnitor’s Settings only if it shows ${sharing.pendingCheck}.`, tag="pair")
+        sharePendingId = sharing.pendingId
+        sharePendingName = sharing.pendingName
+        sharePendingCheck = sharing.pendingCheck
+        sharePendingLine = sharing.pendingLine
+      if sharing.controller != shareController
+        if sharing.controller != "" and now - shareToldAt >= 600000
+          showNotification(title=`${sharing.controller} is controlling this Mac`, body="To stop it, choose Stop Sharing in Magnitor, or remove the iPhone in Settings.", tag="control")
+          shareToldAt = now
+        shareController = sharing.controller
+      if shareControl and shareControlOff > 0 and sharing.controlIdle >= shareControlOff * 60
+        shareControl = false
+        showNotification(title="Control from iPhone is off", body=`No one used it for ${minutesText(shareControlOff)}. Turn it on again in Magnitor’s Settings.`, tag="control-off")
     if widgetOn and vitals.pressure != "" and (widgetAt == 0 or now - widgetAt >= 60000 or widgetShown != widgetShows)
       send widgetSaved = saveWidget(widgetShows, round(vitals.cpu), round(vitals.memory), vitals.pressure, disk.free, disk.size > 0 ? disk.freeBytes / disk.size : 0, clock.epochAtZero + now)
       widgetAt = now
@@ -1300,6 +1389,18 @@ component Magnitor
               if trayShow == "icon"
                 image trayIconSymbol(trayIcon)
           column id="stats" popover=(tray ? "manual" : "auto") toggle=popover width=360 height=600 visibility=(settingsBelow ? "hidden" : "visible") display="flex" flex-direction="column" testId="stats"
+            // A phone asking to pair, or acting on the Mac now: said where the person looks first.
+            if shareOn and (sharePendingId != "" or shareController != "")
+              row padding-top=10 padding-left=12 padding-right=12
+                row flex=1 align-items="center" gap=8 padding="8px 10px" border-radius=10 background-color="-exact-secondary-background" role="status" testId="share-banner"
+                  image "symbol:smartphone" color="-exact-system-orange" aria-hidden=true
+                  text (sharePendingId != "" ? `${sharePendingName} wants to pair. Allow it only if it shows ${sharePendingCheck}.` : `${shareController} is controlling this Mac.`) font="-exact-footnote" flex=1 min-width=0 testId="share-banner-text"
+                  if sharePendingId != ""
+                    link href="/settings" target="settings" testId="share-banner-review"
+                      text "Review"
+                  else
+                    button press=stopSharing testId="share-banner-stop"
+                      text "Stop Sharing"
             // The segmented control: the platform's, between two boxes of one width so it stays centred.
             row align-items="center" gap=4 padding-top=12 padding-left=12 padding-right=12 padding-bottom=8
               column width=32
@@ -1916,21 +2017,44 @@ component Magnitor
                 row
                   text "Share Activity with iPhone"
                   input type="checkbox" switch checked=shareOn change=setShareOn aria-label="Share Activity with iPhone" testId="share-on"
-                if shareOn and shareCode != ""
-                  row
-                    text "Pairing Code" flex=1
-                    text shareCode font-variant-numeric="tabular-nums" testId="share-code"
-                    button press=copyShareCode aria-label="Copy Code" testId="share-copy"
-                      image "symbol:sf/doc.on.doc"
+                if shareOn
+                  // A phone that proved the code: allowed only by the person at the Mac, who
+                  // compares the digits both screens show.
+                  if sharePendingId != ""
+                    row gap=8 align-items="center" testId="share-pending"
+                      column flex=1 min-width=0 gap=2
+                        text `${sharePendingName} wants to pair` testId="share-pending-name"
+                        text `Allow it only if your iPhone shows ${sharePendingCheck}.` font="-exact-footnote" color="-exact-secondary-label" testId="share-pending-check"
+                      button press=denyDevice testId="share-deny"
+                        text "Don’t Allow"
+                      button press=allowDevice buttonStyle="filled" testId="share-allow"
+                        text "Allow"
+                  if shareCode != "" and shareCodeValid
+                    row
+                      text "Pairing Code" flex=1
+                      text shareCode font-variant-numeric="tabular-nums" testId="share-code"
+                      button press=copyShareCode aria-label="Copy Code" testId="share-copy"
+                        image "symbol:sf/doc.on.doc"
+                    row
+                      button press=makeShareCode testId="share-new-code"
+                        text "New Code"
+                  else
+                    row
+                      button press=makeShareCode testId="share-pair"
+                        text "Pair an iPhone…"
                   row
                     text "Address" flex=1
                     text (shareAddress != "" ? shareAddress : "Not on a network") color="-exact-secondary-label" testId="share-address"
                   row
-                    button press=makeShareCode testId="share-new-code"
-                      text "New Code"
-                  row
                     text "Allow Control from iPhone"
                     input type="checkbox" switch checked=shareControl change=setShareControl aria-label="Allow Control from iPhone" testId="share-control"
+                  if shareControl
+                    row
+                      text "Turn Off Control After"
+                      select value=`${shareControlOff}` change=setShareControlOff aria-label="Turn off control after" testId="share-control-off"
+                        for n in [15, 30, 60] key=n
+                          option `${minutesText(n)} unused` value=`${n}`
+                        option "Never" value="0"
                   if shareControl and not sharePointer
                     row
                       column flex=1 min-width=0 gap=2
@@ -1940,6 +2064,19 @@ component Magnitor
                         text "Open Settings"
                 footer
                   text shareNote testId="share-note"
+              if shareOn and shareDevices.length > 0
+                section
+                  header
+                    text "Paired iPhones"
+                  for d in shareDevices key=deviceId(d)
+                    row gap=8 align-items="center" delete=removeDevice(d)
+                      text deviceName(d) flex=1 min-width=0 testId=`share-device-${deviceId(d)}`
+                      if deviceName(d) == shareController
+                        text "Active now" font="-exact-footnote" color="-exact-system-orange" testId=`share-active-${deviceId(d)}`
+                      button press=removeDevice(d) destructive=true testId=`share-remove-${deviceId(d)}`
+                        text "Remove"
+                  footer
+                    text "Only these iPhones are answered. A removed iPhone needs a new code to pair again." testId="share-devices-note"
               section
                 header
                   text "Desktop Widget"

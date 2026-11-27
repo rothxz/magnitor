@@ -1,5 +1,6 @@
 // Run on macOS (or iOS) with tools/fixture.ts answering on 127.0.0.1:47899 as a Mac called
-// Studio whose code is TEST-CODE. A test can't set Bonjour's answer, so the Mac is added by its
+// Studio whose code is TEST-CODE (WAIT-CODE and DENY-CODE wait for the Mac's person, who allows
+// or refuses the phone at its second hello). A test can't set Bonjour's answer, so the Mac is added by its
 // address in Settings, which opens by itself while no Mac is ready; a drive checks the Bonjour
 // list (`prefer extension local-network.browseServices=…`). A process the fixture quits is back
 // ten seconds later, so no two tests quit the same one.
@@ -40,6 +41,55 @@ test "with no Mac, Settings opens by itself, can't be closed, and closes once th
   clock settle
   expect tree missing "settings-title"
   expect state current == "addr:127.0.0.1:47899"
+
+test "pairing waits for the Mac to allow this iPhone, showing the digits to compare"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "wait-code"
+  tap "connect"
+  clock data
+  expect state waiting == true
+  expect state statusLabel == "Waiting for Your Mac"
+  expect tree has "pair-check"
+  expect tree missing "code"
+  expect tree missing "settings-done"
+  clock +1600
+  clock data
+  expect state waiting == true
+  clock +1600
+  clock data
+  expect state waiting == false
+  expect state refused == false
+  clock +10
+  clock data
+  expect state statusLabel == "Connected"
+
+test "a Mac that doesn't allow this iPhone says so, and the code can be entered again"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "deny-code"
+  tap "connect"
+  clock data
+  expect state waiting == true
+  clock +1600
+  clock data
+  clock +1600
+  clock data
+  expect state waiting == false
+  expect state refused == true
+  expect tree has "code"
+  expect text "code-note" == "127.0.0.1:47899 didn’t allow this iPhone. Make a new code in Magnitor’s Settings there to try again."
+  type "code" "test-code"
+  tap "connect"
+  clock data
+  expect state refused == false
+  expect state statusLabel == "Connected"
 
 test "Monitor shows the Mac's dashboard and keeps its sort"
   prefer permission.local-network granted
@@ -179,7 +229,7 @@ test "Settings keep the update interval, and forgetting the code locks Settings 
   type "address" "127.0.0.1:47899"
   tap "add-address"
   tap "every-5"
-  expect text "interval-note" == "While Monitor shows, the Mac is read every 5 seconds. Its graphs show the last 40 readings."
+  expect text "interval-note" == "While Control or Monitor shows, the Mac is read every 5 seconds. Its graphs show the last 40 readings."
   type "code" "TEST-CODE"
   tap "connect"
   clock data
@@ -206,7 +256,7 @@ test "Settings keep the update interval, and forgetting the code locks Settings 
   reload
   expect state interval == 5
 
-test "a Mac added by address that doesn’t answer says so, and the address is kept"
+test "a Mac that doesn’t answer can't be paired, and a paired one that stops answering says so"
   prefer permission.local-network granted
   clock +10
   clock settle
@@ -217,15 +267,44 @@ test "a Mac added by address that doesn’t answer says so, and the address is k
   tap "connect"
   clock data
   expect state statusLabel == "Can’t Reach"
-  expect tree has "settings-retry"
+  expect state refused == false
+  expect text "code-note" == "Make sure 127.0.0.1:47898 is awake, on the same Wi‑Fi, and sharing in Magnitor’s Settings."
+  expect tree has "code"
+  expect tree missing "settings-done"
+  // A paired Mac that stops answering: Settings says so and can close; Monitor offers to retry.
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  expect state statusLabel == "Connected"
+  clock +1000
+  clock settle
+  fail fetch "http://127.0.0.1:47899"
+  tap "tab-monitor"
+  clock +3000
+  clock data
+  expect tree has "retry"
+  // At launch the Mac still doesn't answer: Settings opens by itself, says why, and stays closed
+  // once closed.
+  reload
+  expect state addresses.0 == "127.0.0.1:47898"
+  expect state current == "addr:127.0.0.1:47899"
+  clock +10
+  clock data
+  clock settle
+  expect tree has "settings-title"
+  expect tree has "settings-offline"
   expect tree has "settings-done"
   tap "settings-done"
   clock settle
+  clock +3000
+  clock data
+  clock settle
+  expect tree missing "settings-title"
   tap "tab-monitor"
   clock data
   expect tree has "retry"
-  reload
-  expect state addresses.0 == "127.0.0.1:47898"
 
 test "Control sets the Mac's volume, mutes it and locks it; Apps opens an app"
   prefer permission.local-network granted
@@ -240,6 +319,10 @@ test "Control sets the Mac's volume, mutes it and locks it; Apps opens an app"
   clock settle
   clock data
   expect tree has "volume"
+  expect text "control-mac-name" == "Studio"
+  expect text "control-status" == "Connected"
+  expect text "control-cpu" == "19%"
+  expect text "control-memory" == "66%"
   type "volume" "65"
   clock data
   expect state controls.volume == 65
@@ -261,7 +344,7 @@ test "Control sets the Mac's volume, mutes it and locks it; Apps opens an app"
   clock data
   expect text "apps-title" == "Apps"
   expect tree has "open-notes"
-  expect text "apps-note" == "3 apps on Studio. A tap opens one, or brings it to the front."
+  expect text "apps-note" == "10 apps on Studio. A tap opens one, or brings it to the front."
   type "app-search" "saf"
   expect tree has "open-safari"
   expect tree missing "open-notes"
@@ -336,3 +419,32 @@ test "the Trackpad moves the Mac's pointer, clicks, and holds Left for a drag"
   back
   clock settle
   expect state here == "control"
+
+test "Apps shows each app's icon from the Mac, a letter for one without, and keeps them"
+  prefer permission.local-network granted
+  clock +10
+  clock settle
+  type "address" "127.0.0.1:47899"
+  tap "add-address"
+  type "code" "TEST-CODE"
+  tap "connect"
+  clock data
+  clock +1000
+  clock settle
+  tap "tab-apps"
+  clock data
+  clock data
+  expect tree has "apps-grid"
+  expect state icons.length == 10
+  expect state icons.0 .app == "/System/Applications/Calendar.app"
+  expect state icons.0 .icon == "app:/cache/icons/5942eedb-1700000000.png"
+  // Legacy Tool's icon couldn't be drawn on the Mac: its letter stands in.
+  expect state icons.1 .icon == ""
+  reload
+  clock +10
+  clock data
+  clock settle
+  tap "tab-apps"
+  clock data
+  clock data
+  expect state icons.0 .icon == "app:/cache/icons/5942eedb-1700000000.png"

@@ -7,7 +7,12 @@
     "dev": "EXACT_IDENTITY=- bun exact.mjs mac --run",
     "dev:linux": "bun exact.mjs linux && ./target/host-dev/magnitor-linux",
     "eas:build":"cd remote && bunx eas build -p ios --profile exact",
-    "eas:submit":"cd remote && bunx eas submit -p ios --profile exact --latest"
+    "eas:submit":"cd remote && bunx eas submit -p ios --profile exact --latest",
+    "eas:build:apk": "cd remote && bunx eas build -p android --profile exact-apk",
+    "eas:build:aab": "cd remote && bunx eas build -p android --profile exact",
+    "clean": "bun run clean:mac && bun run clean:remote",
+    "clean:mac": "rm -rf target && echo 'cleared target/'",
+    "clean:remote": "rm -rf remote/target && echo 'cleared remote/target/'"
   },
   "dependencies": {
     "@exact/child-process": "file:../exact/packages/child-process",

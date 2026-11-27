@@ -1,0 +1,10 @@
+forma remote
+
+// Icons the platforms' symbol roles lack: SF Symbols on Apple, Material Icons' outlines
+// (Apache-2.0) elsewhere.
+icons
+  icon.laptop = icon(sf "laptopcomputer", svg "icons/laptop.svg")
+  icon.pointer = icon(sf "hand.point.up.left.fill", svg "icons/pointer.svg")
+  icon.gauge = icon(sf "gauge.with.dots.needle.33percent", svg "icons/gauge.svg")
+  icon.grid = icon(sf "square.grid.2x2.fill", svg "icons/grid.svg")
+  icon.display = icon(sf "display", svg "icons/display.svg")

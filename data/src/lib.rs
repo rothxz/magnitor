@@ -21,6 +21,7 @@ pub mod control;
 pub mod devclean;
 pub mod devtools;
 pub mod docker;
+pub mod guard;
 pub mod icons;
 pub mod pointer;
 pub mod ports;
@@ -190,12 +191,21 @@ impl DataSource for Magnitor {
                 let limits = watchdog::Limits { cpu: float(2)?, busy_for: float(3)?, grow_gb: float(4)? };
                 Ok(Answer::Now(self.watchdog.unusual(number(0)?, float(1)?, limits).to_value()))
             }
-            // Whether sharing with an iPhone is on, its code, the pulse that asks again, and
-            // whether the phone may control the Mac.
+            // Whether sharing with an iPhone is on, the pairing code and when it was made, the
+            // pulse that asks again, whether the phone may control the Mac, the phones allowed
+            // (`guard::Device::line`), and one just refused.
             "share" => {
                 let on = matches!(args.first(), Some(Value::Bool(true)));
-                let control = matches!(args.get(3), Some(Value::Bool(true)));
-                Ok(Answer::Now(self.share.share(on, text(1)?, control).to_value()))
+                let code_at = match args.get(2) {
+                    Some(Value::Number(n)) => *n,
+                    _ => 0.0,
+                };
+                let control = matches!(args.get(4), Some(Value::Bool(true)));
+                let devices = match args.get(5) {
+                    Some(Value::List(items)) => items.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
+                Ok(Answer::Now(self.share.share(on, text(1)?, code_at, control, &devices, text(6)?).to_value()))
             }
             "newShareCode" => Ok(Answer::Now(share::new_code().to_value())),
             "endProcess" => {

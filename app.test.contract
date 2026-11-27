@@ -754,7 +754,7 @@ test "the monthly developer files reminder starts counting when alerts go on"
   expect state remindCheckedAt >= 1
   expect state reminderScan == false
 
-test "sharing with an iPhone makes a code, serves, and a new code replaces it"
+test "sharing with an iPhone makes a one-time code, serves, and a new code replaces it"
   at "/settings"
   expect state shareOn == false
   expect tree missing "share-code"
@@ -775,6 +775,19 @@ test "sharing with an iPhone makes a code, serves, and a new code replaces it"
   expect state shareControl == false
   tap "share-new-code"
   clock data
+  expect state shareCodeValid == true
+  expect state shareCodeAt >= 1
+  expect tree has "share-code"
+  expect tree missing "share-pair"
+  expect tree missing "share-pending"
+  expect tree missing "share-control-off"
+  tap "share-control"
+  clock data
+  expect state shareControlOff == 30
+  expect tree has "share-control-off"
+  tap "share-control"
+  clock data
   tap "share-on"
   clock data
   expect tree missing "share-code"
+  expect tree missing "share-pair"

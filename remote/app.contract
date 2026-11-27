@@ -6,7 +6,8 @@
 //   root, so no edge swipe back competes with a finger on the pad.
 // - Monitor: the Mac's load with its recent history, and its busiest processes, which it can
 //   search and quit (a row's swipe: Quit at once, Force Quit after asking).
-// - Apps: the apps in the Mac's Applications folders, each opened with a tap.
+// - Apps: the apps in the Mac's Applications folders as Launchpad shows them, a grid of their icons
+//   (asked of the Mac once and kept, app.ts's `appIcons`), each opened with a tap.
 // Control and Apps need Magnitor's Settings › iPhone › Allow Control from iPhone (else the Mac
 // answers "off").
 //
@@ -14,8 +15,12 @@
 // Share Activity with iPhone is on, and announces the Mac by Bonjour as `_magnitor._tcp`. Settings
 // lists those Macs (`browseServices`); a Mac Bonjour can't find (a guest network drops it) is
 // added by the address Magnitor's Settings show. A Mac asks once for the pairing code its
-// Settings show; the code is kept per Mac and sent with each request (app.ts's `ask`). Until a Mac
-// is chosen and its code matches, Settings stays open over the tabs, with no way to close it.
+// Settings show, which works once: the phone proves it (`pairMac`), then waits while the person
+// allows it on the Mac, comparing the six digits both show (`pairState`). The code is kept per Mac
+// only to mark it paired; each request is signed with this phone's own key (app.ts's `ask`). Until a Mac
+// is chosen and paired, Settings stays open over the tabs, with no way to close it. A
+// paired Mac that can't be reached at launch opens Settings once too, where another Mac can be
+// chosen; it closes by itself when the Mac answers.
 //
 // One colour carries the data: the system blue (the accent) draws every ring, graph and bar; the
 // status colours mean only a level (memory pressure, thermal state, the connection) and red only
@@ -111,6 +116,14 @@ shape Ended
   ok: bool
   message: string
 
+// A pairing's word (app.ts's `pairMac` and `pairState`): `status` is "paired", "pending" (the
+// Mac's person hasn't allowed it yet), "denied", "unpaired" (the wait ran out), "code" (wrong or
+// spent) or "offline"; `check`, the six digits this phone shows; `message`, why it failed.
+shape Pairing
+  status: string
+  check: string
+  message: string
+
 // A finger on the trackpad: its pointer's id, where it was last in the window (`x`, `y`) and in
 // the pad (`ox`, `oy`, for its mark).
 shape Touch
@@ -120,10 +133,17 @@ shape Touch
   ox: number
   oy: number
 
-// An app the Mac can open: its name and its bundle's path.
+// An app the Mac can open: its name, its bundle's path, and when the bundle last changed (its
+// icon is kept until then).
 shape MacApp
   name: string
   app: string
+  stamp: number
+
+// An app's icon, kept on this phone (`icon` an `app:/cache` PNG, "" while the Mac hasn't sent one).
+shape AppIcon
+  app: string
+  icon: string
 
 // The Mac's sound (`volume` 0–100; `hasVolume` false when its output sets its own) and the apps
 // in its Applications folders. `status` is "" when read, "off" when the Mac doesn't allow
@@ -156,6 +176,7 @@ fn everyText(s: number): string = `every ${s} ${s == 1 ? "second" : "seconds"}`
 
 // A ring's share of the whole, as `RingProgress` takes it.
 fn share(percent: number): number = min(1, max(0, percent / 100))
+fn iconOf(icons: AppIcon[], app: string): string = match first(icons.filter(i => i.app == app)) { case some(i) => i.icon, case none => "" }
 
 component Remote
   state pairings: string[] = [] persist
@@ -167,10 +188,20 @@ component Remote
   state sort = "cpu" persist
   state addressDraft = ""
   state codeDraft = ""
+  // The code proved while the Mac's person decides, the digits to compare, and why the last
+  // pairing failed.
+  state pairingCode = ""
+  state pairCheck = ""
+  state pairError = ""
+  state pairOffline = false
   state query = ""
   state tick = 0
   // Settings opened because no Mac was ready: it closes by itself once one answers.
   state forced = false
+  // This launch: whether the Mac has answered yet, and whether Settings has shown (by itself or
+  // asked for), so an unreachable Mac opens it once, not again after it's closed.
+  state reached = false
+  state settingsShown = false
   // The process a Quit asks about, and why the last one failed.
   state aimPid = 0
   state aimApp = ""
@@ -207,13 +238,16 @@ component Remote
   mutation ended as shape Ended refreshes activity, detail then afterEnd
   // The reading shown is this Mac's: a new one waits for its first answer.
   derive shown = activity.name != "" and activity.status == ""
-  derive refused = code != "" and activity.status == "code"
+  derive refused = (code != "" and activity.status == "code") or (pairError != "" and not pairOffline)
+  mutation paired as shape Pairing then afterPair
+  mutation waited as shape Pairing then afterWait
+  derive waiting = pairingCode != ""
   derive connected = code != "" and shown
   // No Mac to work on: Settings stays up until one is chosen and its code matches.
   derive mustPair = macId == "" or code == "" or refused
   derive macTitle = shown ? activity.name : macName(macId)
-  derive statusLabel = macId == "" ? "" : code == "" ? "Not Paired" : refused ? "Code Doesn’t Match" : activity.status == "offline" ? "Can’t Reach" : connected ? "Connected" : "Connecting…"
-  derive statusTint = connected ? "-exact-system-green" : activity.status == "offline" or refused ? "-exact-system-orange" : "-exact-system-gray"
+  derive statusLabel = macId == "" ? "" : waiting ? "Waiting for Your Mac" : pairOffline ? "Can’t Reach" : pairError != "" ? "Not Paired" : code == "" ? "Not Paired" : refused ? "No Longer Paired" : activity.status == "offline" ? "Can’t Reach" : connected ? "Connected" : "Connecting…"
+  derive statusTint = connected ? "-exact-system-green" : activity.status == "offline" or refused or pairOffline ? "-exact-system-orange" : "-exact-system-gray"
   resource controls = controls(macId, code) when (nav.tab == "control" or nav.tab == "apps") and not mustPair as shape Controls else empty() transient
   mutation controlled as shape Ended refreshes controls then afterControl
   derive volumeShown = volumeDraft >= 0 ? volumeDraft : controls.volume
@@ -222,11 +256,16 @@ component Remote
   derive pointerError = match pointed { case some(p) => p.ok ? "" : p.message, case none => "" }
   derive firstTouch = match touches.at(0) { case some(t) => t.id, case none => -1 }
   derive appsShown = controls.apps.filter(a => a.name.toLowerCase().includes(appQuery.trim().toLowerCase()))
+  // Each app as "<stamp> <path>", so an updated app's icon is asked for again.
+  derive iconKeys = controls.apps.map(a => `${a.stamp} ${a.app}`)
+  resource icons = appIcons(macId, code, iconKeys) when nav.tab == "apps" and controls.ready as shape AppIcon[] else empty()
   derive searching = query.trim() != ""
   derive byMemory = sort == "memory"
   derive detailShown = detail.status == "" and detail.name != ""
-  // `every` takes a literal: one timer per choice in Settings › Updates.
-  derive polling = onMonitor and not mustPair
+  // `every` takes a literal: one timer per choice in Settings › Updates. Control's card shows the
+  // load too; the trackpad, sending many requests a second, reads nothing.
+  // Settings opened by itself keeps asking, so it can close once the Mac answers.
+  derive polling = (onMonitor or here == "control" or (forced and onSettings)) and not mustPair
   task poll2 when polling and interval == 2
     every(2000, poll)
   task poll3 when polling and interval == 3
@@ -235,8 +274,19 @@ component Remote
     every(5000, poll)
   task poll10 when polling and interval == 10
     every(10000, poll)
+  // While the Mac's person decides, it is asked every second and a half.
+  task waitForMac when waiting
+    every(1500, checkWait)
   task askForMac when mustPair and not onSettings
     after(1, openForced)
+  task noteReached when connected and not reached
+    after(1, markReached)
+  derive awayAtLaunch = not mustPair and not reached and not settingsShown and activity.status == "offline"
+  task askWhenAway when awayAtLaunch and not onSettings
+    after(1, openForced)
+  // Control's own request can fail while the reading gets through (a Mac still being found).
+  task recoverControls when connected and controls.status == "offline"
+    after(1, retryControls)
   // A moment to see "Connected" before the sheet goes.
   task closeWhenConnected when forced and connected and onSettings
     after(800, closeForced)
@@ -250,13 +300,21 @@ component Remote
     nav = back(nav)
   action poll
     tick = tick + 1
+    if nav.tab != "monitor" and controls.status == "offline"
+      refresh controls
   action retry
     refresh activity
+    if nav.tab != "monitor"
+      refresh controls
+  action markReached
+    reached = true
   action openSettings
+    settingsShown = true
     if not onSettings
       nav = push(nav, settingsPath(nav.tab))
   action openForced
     forced = true
+    settingsShown = true
     if not onSettings
       nav = push(nav, settingsPath(nav.tab))
   action closeForced
@@ -270,6 +328,10 @@ component Remote
     if id != macId
       current = id
       codeDraft = ""
+      pairingCode = ""
+      pairCheck = ""
+      pairError = ""
+      pairOffline = false
       query = ""
       appQuery = ""
       haptic("selection")
@@ -292,12 +354,52 @@ component Remote
       current = ""
   action editCode(v: string)
     codeDraft = v
-  // The code replaces any kept for this Mac; the reading it asks for says whether it matched.
+    pairError = ""
+    pairOffline = false
+  // The Mac checks the code; once it allows this phone, the code marks the Mac paired here.
   action pair
     let c = codeDraft.toUpperCase().replaceAll(" ", "")
     if c != ""
-      pairings = pairings.filter(p => pairedId(p) != macId).concat([`${c} ${macId}`])
-      codeDraft = ""
+      pairError = ""
+      pairOffline = false
+      send paired = pairMac(macId, c)
+  action afterPair
+    match paired
+      case some(p)
+        if p.status == "paired"
+          finishPair(codeDraft.toUpperCase().replaceAll(" ", ""))
+        else if p.status == "pending"
+          pairingCode = codeDraft.toUpperCase().replaceAll(" ", "")
+          pairCheck = p.check
+        else
+          pairError = p.message != "" ? p.message : "That code doesn’t match the one in Magnitor’s Settings on your Mac."
+          pairOffline = p.status == "offline"
+      case none
+        pairError = pairError
+  action checkWait
+    send waited = pairState(macId)
+  action afterWait
+    match waited
+      case some(w)
+        if pairingCode != "" and w.status == "paired"
+          finishPair(pairingCode)
+        else if pairingCode != "" and (w.status == "denied" or w.status == "unpaired")
+          pairingCode = ""
+          pairCheck = ""
+          pairError = w.status == "denied" ? `${macTitle} didn’t allow this iPhone. Make a new code in Magnitor’s Settings there to try again.` : "Your Mac didn’t answer in time. Make a new code in Magnitor’s Settings there and enter it."
+      case none
+        pairError = pairError
+  action finishPair(c: string)
+    pairings = pairings.filter(p => pairedId(p) != macId).concat([`${c} ${macId}`])
+    codeDraft = ""
+    pairingCode = ""
+    pairCheck = ""
+    pairError = ""
+    pairOffline = false
+    haptic("success")
+  action cancelWait
+    pairingCode = ""
+    pairCheck = ""
   // Forgets this Mac's code; Settings then asks for it again.
   action signOut
     pairings = pairings.filter(p => pairedId(p) != macId)
@@ -327,7 +429,8 @@ component Remote
     volumeDraft = round(v)
     controlTitle = "Couldn’t Change the Volume"
     send controlled = control(macId, code, "volume", `${round(v)}`)
-  action setMuted(on: bool)
+  action toggleMute
+    let on = not controls.muted
     controlTitle = on ? "Couldn’t Mute" : "Couldn’t Unmute"
     haptic("selection")
     send controlled = control(macId, code, "mute", on ? "1" : "0")
@@ -439,7 +542,7 @@ component Remote
                     button press=openSettings aria-label="Settings" testId="settings-control"
                       image "symbol:settings"
                   if mustPair
-                    EmptyState(symbol="symbol:smartphone", title="No Mac Connected", message="Choose your Mac in Settings to control it from here.")
+                    EmptyState(symbol="symbol:icon.laptop", title="No Mac Connected", message="Choose your Mac in Settings to control it from here.")
                       button press=openSettings testId="control-connect"
                         text "Open Settings"
                   else if controls.status == "off"
@@ -455,39 +558,57 @@ component Remote
                       progress aria-label="Loading"
                   else
                     list id="controls" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
+                      // The Mac: its name, whether it answers, and its load at a glance.
+                      section
+                        row gap=14 align-items="center" testId="mac-card"
+                          box width=56 height=56 border-radius=16 background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
+                            image "symbol:icon.laptop" font="-exact-title1" color="-exact-system-blue"
+                          column flex=1 min-width=0 gap=4
+                            text macTitle font="-exact-title3" font-weight=600 testId="control-mac-name"
+                            row gap=6 align-items="center"
+                              box width=8 height=8 border-radius=4 background-color=statusTint flex-shrink=0 aria-hidden=true
+                              text statusLabel font="-exact-footnote" color="-exact-secondary-label" testId="control-status"
+                        if shown
+                          row gap=10
+                            Gauge(id="control-cpu", label="CPU", value=`${round(activity.cpuLoad)}%`, fraction=share(activity.cpuLoad))
+                            Gauge(id="control-memory", label="Memory", value=`${round(activity.memoryShare * 100)}%`, fraction=activity.memoryShare)
                       section
                         link href=path("trackpad") testId="open-trackpad"
-                          row gap=12 align-items="center" flex=1 min-width=0
-                            Tile(symbol="symbol:smartphone")
+                          row gap=14 align-items="center" flex=1 min-width=0 padding="4px 0"
+                            box width=44 height=44 border-radius=12 background-color="AccentColor" display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
+                              image "symbol:icon.pointer" font="-exact-title3" color="AccentColorText"
                             column flex=1 min-width=0 gap=2
-                              text "Trackpad"
-                              text "Move the pointer, click and scroll" font="-exact-footnote" color="-exact-secondary-label"
+                              text "Trackpad" font="-exact-headline"
+                              text "Move the pointer, click, scroll and drag" font="-exact-footnote" color="-exact-secondary-label"
                           image "symbol:forward-chevron"
                       section
                         header
-                          text "Sound"
-                        row gap=12 align-items="center"
-                          image (controls.muted ? "symbol:speaker-mute" : "symbol:speaker") color="-exact-system-blue" aria-hidden=true
-                          input type="range" min=0 max=100 step=1 value=volumeShown input=dragVolume change=setVolume disabled=(not controls.hasVolume) aria-label="Volume" testId="volume" flex=1 min-width=0
-                          text `${volumeShown}%` font-variant-numeric="tabular-nums" color="-exact-secondary-label" testId="volume-value"
-                        row
-                          text "Mute" flex=1
-                          input type="checkbox" switch checked=controls.muted change=setMuted aria-label="Mute" testId="mute"
+                          text "Quick Actions"
+                        row gap=10
+                          button press=toggleMute aria-label=(controls.muted ? "Unmute" : "Mute") aria-pressed=controls.muted testId="mute" flex=1 min-width=0 display="flex" flex-direction="column" align-items="center" gap=8 padding="14px 4px" border-radius=16 background-color="-exact-tertiary-fill"
+                            box width=44 height=44 border-radius=22 background-color=(controls.muted ? "AccentColor" : "-exact-secondary-grouped-background") display="flex" align-items="center" justify-content="center" aria-hidden=true
+                              image (controls.muted ? "symbol:speaker-mute" : "symbol:speaker") color=(controls.muted ? "AccentColorText" : "-exact-system-blue")
+                            text (controls.muted ? "Muted" : "Mute") font="-exact-footnote" font-weight=500 color="-exact-label" text-align="center"
+                          button press=displayOff aria-label="Turn Display Off" testId="display-off" flex=1 min-width=0 display="flex" flex-direction="column" align-items="center" gap=8 padding="14px 4px" border-radius=16 background-color="-exact-tertiary-fill"
+                            box width=44 height=44 border-radius=22 background-color="-exact-secondary-grouped-background" display="flex" align-items="center" justify-content="center" aria-hidden=true
+                              image "symbol:moon" color="-exact-system-blue"
+                            text "Display Off" font="-exact-footnote" font-weight=500 color="-exact-label" text-align="center"
+                          button press=lockMac aria-label="Lock Screen" testId="lock" flex=1 min-width=0 display="flex" flex-direction="column" align-items="center" gap=8 padding="14px 4px" border-radius=16 background-color="-exact-tertiary-fill"
+                            box width=44 height=44 border-radius=22 background-color="-exact-secondary-grouped-background" display="flex" align-items="center" justify-content="center" aria-hidden=true
+                              image "symbol:lock" color="-exact-system-blue"
+                            text "Lock" font="-exact-footnote" font-weight=500 color="-exact-label" text-align="center"
                         footer
-                          text (controls.hasVolume ? `The volume of ${macTitle}’s sound output.` : "This Mac’s sound output sets its own volume, as a display connected by HDMI does.") testId="volume-note"
+                          text "With the display off, your Mac stays awake and keeps sharing. Unlock it at the Mac."
                       section
                         header
-                          text "Screen"
-                        row
-                          button press=displayOff testId="display-off" flex=1
-                            image "symbol:moon"
-                            text "Turn Display Off"
-                        row
-                          button press=lockMac testId="lock" flex=1
-                            image "symbol:lock"
-                            text "Lock Screen"
+                          text "Volume"
+                        row gap=12 align-items="center"
+                          image "symbol:speaker-mute" color="-exact-secondary-label" aria-hidden=true
+                          input type="range" min=0 max=100 step=1 value=volumeShown input=dragVolume change=setVolume disabled=(not controls.hasVolume) aria-label="Volume" testId="volume" flex=1 min-width=0
+                          image "symbol:speaker" color="-exact-secondary-label" aria-hidden=true
+                          text `${volumeShown}%` min-width="2.75rem" text-align="end" font-weight=600 font-variant-numeric="tabular-nums" testId="volume-value"
                         footer
-                          text "Your Mac stays awake and keeps sharing. Unlock it at the Mac."
+                          text (controls.hasVolume ? `The volume of ${macTitle}’s sound output.` : "This Mac’s sound output sets its own volume, as a display connected by HDMI does.") testId="volume-note"
               // The trackpad: its own screen, with no tab bar, the pad as tall as it can be. The
               // bar's Back button goes back; a swipe back doesn't. iOS refuses its back swipe (the
               // edge's, and iOS 26's from anywhere) when the finger lands on a `swiperight` node,
@@ -508,7 +629,7 @@ component Remote
                     box flex=1 min-height=200 position="relative" overflow="hidden" border-radius=28 background-color="-exact-secondary-grouped-background" touch-action="none" pointerdown=touchDown pointermove=touchMove pointerup=touchUp role="application" aria-label="Trackpad: one finger moves the pointer, a tap clicks, two fingers scroll" testId="pad"
                       if touches.length == 0
                         column position="absolute" inset=0 align-items="center" justify-content="center" gap=10 padding=24 aria-hidden=true
-                          image "symbol:sf/hand.point.up.left" font="-exact-large-title" color="-exact-tertiary-label"
+                          image "symbol:icon.pointer" font="-exact-large-title" color="-exact-tertiary-label"
                           column align-items="center" gap=4
                             text "Move with one finger · Tap to click" font="-exact-footnote" color="-exact-tertiary-label" text-align="center"
                             text "Scroll with two · Two‑finger tap right‑clicks" font="-exact-footnote" color="-exact-tertiary-label" text-align="center"
@@ -545,11 +666,14 @@ component Remote
                     list id="activity" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
                       if not searching
                         section
-                          row gap=12 align-items="flex-start" testId="overview"
-                            column flex=1 min-width=0
-                              RingProgress(label="CPU", value=`${round(activity.cpuLoad)}%`, fraction=share(activity.cpuLoad), tint=some("-exact-system-blue"))
-                            column flex=1 min-width=0
-                              RingProgress(label="Memory", value=`${round(activity.memoryShare * 100)}%`, fraction=activity.memoryShare, tint=some("-exact-system-blue"))
+                          // The rings at their smallest (8.5rem): a glance, with the numbers below.
+                          row gap=12 align-items="flex-start" justify-content="space-around" padding="4px 0" testId="overview"
+                            column flex=1 min-width=0 align-items="center"
+                              column width="8.5rem" max-width="100%"
+                                RingProgress(label="CPU", value=`${round(activity.cpuLoad)}%`, fraction=share(activity.cpuLoad), tint=some("-exact-system-blue"))
+                            column flex=1 min-width=0 align-items="center"
+                              column width="8.5rem" max-width="100%"
+                                RingProgress(label="Memory", value=`${round(activity.memoryShare * 100)}%`, fraction=activity.memoryShare, tint=some("-exact-system-blue"))
                           row gap=10
                             Stat(id="overview-processes", label="Processes", value=`${activity.count}`)
                             Stat(id="overview-pressure", label="Pressure", value=activity.pressure)
@@ -726,19 +850,22 @@ component Remote
                     column flex=1 align-items="center" justify-content="center" gap=12
                       progress aria-label="Loading"
                   else
-                    list id="apps-list" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
-                      section
-                        for a in appsShown key=a.app
-                          button press=openApp(a.app, a.name) aria-label=`Open ${a.name}` testId=`open-${slug(a.name)}`
-                            row gap=12 align-items="center" flex=1 min-width=0
-                              Monogram(name=a.name)
-                              text a.name flex=1 min-width=0 text-align="start" color="-exact-label"
-                              image "symbol:open-app" color="-exact-tertiary-label" aria-hidden=true
+                    // Launchpad's grid: each app's icon over its name, as many across as fit.
+                    scroll id="apps-list" flex=1 min-height=0 overflow-y="auto"
+                      column padding="12px 12px 28px" gap=20
                         if appsShown.length == 0
-                          row
-                            text `No app matches “${appQuery.trim()}”.` color="-exact-secondary-label" testId="no-app"
-                        footer
-                          text `${appsText(controls.apps.length)} on ${macTitle}. A tap opens one, or brings it to the front.` testId="apps-note"
+                          column align-items="center" gap=6 padding="48px 24px" testId="no-app"
+                            image "symbol:search" font="-exact-title1" color="-exact-tertiary-label" aria-hidden=true
+                            text "No Results" font="-exact-headline"
+                            text `No app matches “${appQuery.trim()}”.` font="-exact-subheadline" color="-exact-secondary-label" text-align="center"
+                        else
+                          box display="grid" grid-template-columns="repeat(auto-fill, minmax(5.25rem, 1fr))" row-gap=18 column-gap=4 testId="apps-grid"
+                            for a in appsShown key=a.app
+                              // `appearance="none"`: a platform button would take the icon for its symbol.
+                              button appearance="none" press=openApp(a.app, a.name) aria-label=`Open ${a.name}` testId=`open-${slug(a.name)}` display="flex" flex-direction="column" align-items="center" gap=6 padding="6px 2px" border-radius=14
+                                AppIcon(name=a.name, icon=iconOf(icons, a.app), size=64)
+                                text a.name font="-exact-caption1" color="-exact-label" text-align="center" line-clamp=2 width="100%"
+                        text `${appsText(controls.apps.length)} on ${macTitle}. A tap opens one, or brings it to the front.` font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="apps-note"
               // Settings: the Mac the tabs work on, its code, and the app's own choices. While no
               // Mac is ready it has no Done and won't swipe away.
               if isSettings(e.name)
@@ -753,39 +880,54 @@ component Remote
                       row
                         column flex=1 min-width=0 align-items="center" gap=8 padding="12px 0"
                           box width=64 height=64 border-radius=16 background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" aria-hidden=true
-                            image "symbol:sf/laptopcomputer" font="-exact-title1" color="-exact-system-blue"
+                            image "symbol:icon.laptop" font="-exact-title1" color="-exact-system-blue"
                           text (macId == "" ? "Connect to Your Mac" : macTitle) font="-exact-title3" font-weight=600 text-align="center" testId="current-mac"
                           if macId == ""
                             text "On your Mac, open Magnitor’s Settings and turn on iPhone › Share Activity with iPhone. Then choose your Mac below." font="-exact-footnote" color="-exact-secondary-label" text-align="center" testId="welcome"
                           else
                             Badge(label=statusLabel, tint=some(statusTint))
-                    if macId != "" and (code == "" or refused)
+                    if macId != "" and waiting
+                      section
+                        header
+                          text "Allow This iPhone"
+                        row gap=12 align-items="center"
+                          progress aria-label="Waiting for your Mac"
+                          column flex=1 min-width=0 gap=4
+                            text `On ${macTitle}, allow this iPhone in Magnitor’s Settings.` testId="pair-wait"
+                            text `Allow it only if your Mac shows ${pairCheck}.` font="-exact-footnote" color="-exact-secondary-label" testId="pair-check"
+                        footer
+                          text "The digits come from this iPhone’s own key. If your Mac shows others, don’t allow it: someone else may be pairing." testId="pair-note"
+                      section
+                        button press=cancelWait testId="pair-cancel"
+                          text "Cancel"
+                    if macId != "" and not waiting and (code == "" or refused)
                       section
                         header
                           text "Pairing Code"
+                        // `appearance="none"`: the row is the field, as in iOS Settings; Android's
+                        // filled field would draw a second box and an underline inside the row.
                         row
-                          input value=codeDraft input=editCode submit=pair placeholder="ABCD-EFGH" autocapitalize="characters" autocorrect="off" spellcheck=false autofocus=true aria-label="Pairing code" aria-invalid=refused testId="code" flex=1 min-width=0
+                          input appearance="none" value=codeDraft input=editCode submit=pair placeholder="ABCD-EFGH" autocapitalize="characters" autocorrect="off" spellcheck=false autofocus=true aria-label="Pairing code" aria-invalid=refused testId="code" flex=1 min-width=0
                         footer
-                          text (refused ? "That code doesn’t match. Check Magnitor’s Settings on your Mac: a new code there replaces the old one." : "Enter the code Magnitor’s Settings show on your Mac, under iPhone › Share Activity with iPhone. It’s kept on this iPhone.") color=(refused ? "-exact-system-red" : "-exact-secondary-label") testId="code-note"
+                          text (pairError != "" ? pairError : refused ? "Your Mac no longer knows this iPhone. Choose Pair an iPhone in Magnitor’s Settings there and enter the new code." : "On your Mac, choose Pair an iPhone in Magnitor’s Settings and enter the code it shows. It works once; then you allow this iPhone there.") color=(pairError != "" or refused ? "-exact-system-red" : "-exact-secondary-label") testId="code-note"
+                      // An action in a grouped list is its own row, not a button drawn inside one.
                       section
-                        row
-                          button press=pair buttonStyle="filled" disabled=(codeDraft.trim() == "") testId="connect" flex=1
-                            text "Connect"
+                        button press=pair disabled=(codeDraft.trim() == "" or pending(paired)) testId="connect"
+                          text "Connect"
                     if activity.status == "offline" and macId != "" and code != ""
                       section
                         row gap=10 align-items="flex-start"
                           image "symbol:alert" color="-exact-system-orange" aria-hidden=true
                           text activity.message font="-exact-footnote" flex=1 min-width=0 testId="settings-offline"
-                        row
-                          button press=retry testId="settings-retry" flex=1
-                            text "Try Again"
+                        button press=retry testId="settings-retry"
+                          text "Try Again"
                     section
                       header
                         text "On This Wi‑Fi"
                       for s in found.services key=s.name
                         button press=chooseMac(`svc:${s.name}`) aria-label=s.name aria-pressed=(macId == `svc:${s.name}`) testId=`mac-${slug(s.name)}`
                           row gap=12 align-items="center" flex=1 min-width=0
-                            Tile(symbol="symbol:sf/laptopcomputer")
+                            Tile(symbol="symbol:icon.laptop")
                             text s.name flex=1 min-width=0 text-align="start" color="-exact-label"
                             if codeFor(pairings, `svc:${s.name}`) != "" and macId != `svc:${s.name}`
                               Badge(label="Paired", tint=none)
@@ -811,8 +953,8 @@ component Remote
                             if macId == `addr:${a}`
                               image "symbol:checkmark" color="-exact-system-blue" aria-hidden=true
                       row gap=8 align-items="center"
-                        input value=addressDraft input=editAddress submit=addAddress placeholder="192.168.1.20" inputmode="url" autocapitalize="none" autocorrect="off" aria-label="Mac’s address" testId="address" flex=1 min-width=0
-                        button press=addAddress buttonStyle="bordered" disabled=(addressDraft.trim() == "") testId="add-address"
+                        input appearance="none" value=addressDraft input=editAddress submit=addAddress placeholder="192.168.1.20" inputmode="url" autocapitalize="none" autocorrect="off" aria-label="Mac’s address" testId="address" flex=1 min-width=0
+                        button press=addAddress buttonStyle="plain" disabled=(addressDraft.trim() == "") testId="add-address"
                           text "Add"
                       footer
                         text "When your Mac isn’t found on this Wi‑Fi, add the address Magnitor’s Settings show. Swipe an address to remove it." testId="settings-address-note"
@@ -831,7 +973,7 @@ component Remote
                           button role="radio" aria-checked=(interval == s) press=setInterval(s) testId=`every-${s}` flex=1
                             text `${s} s`
                       footer
-                        text `While Monitor shows, the Mac is read ${everyText(interval)}. Its graphs show the last 40 readings.` testId="interval-note"
+                        text `While Control or Monitor shows, the Mac is read ${everyText(interval)}. Its graphs show the last 40 readings.` testId="interval-note"
                     section
                       header
                         text "Local Network"
@@ -843,11 +985,10 @@ component Remote
                           text "Open iPhone Settings"
                     if code != ""
                       section
-                        row
-                          button press=signOut destructive=true testId="sign-out" flex=1
-                            text "Forget Pairing Code"
+                        button press=signOut destructive=true testId="sign-out"
+                          text "Forget This Mac"
                         footer
-                          text `${macTitle} asks for its code again next time.`
+                          text `This iPhone stops using ${macTitle} until you pair it again. To stop ${macTitle} answering it, remove it in Magnitor’s Settings there.`
       dialog id="control-failed" role="alertdialog" aria-label=controlTitle
         text controlError testId="control-error"
         button commandfor="control-failed" command="close" testId="control-ok"
@@ -867,13 +1008,13 @@ component Remote
       // The trackpad hides the tab bar, for room on the pad.
       row role="tablist" display=(here == "trackpad" ? "none" : "flex") testId="tabs"
         button role="tab" aria-controls="panel-control" aria-selected=(nav.tab == "control") press=pick("control") testId="tab-control" flex=1
-          image "symbol:sf/hand.point.up.left"
+          image "symbol:icon.pointer"
           text "Control"
         button role="tab" aria-controls="panel-monitor" aria-selected=(nav.tab == "monitor") press=pick("monitor") testId="tab-monitor" flex=1
-          image "symbol:sf/gauge.with.dots.needle.33percent"
+          image "symbol:icon.gauge"
           text "Monitor"
         button role="tab" aria-controls="panel-apps" aria-selected=(nav.tab == "apps") press=pick("apps") testId="tab-apps" flex=1
-          image "symbol:sf/square.grid.2x2"
+          image "symbol:icon.grid"
           text "Apps"
 
 // A graph of the last readings: a band filled with the accent fading down, an optional band
@@ -921,13 +1062,34 @@ component Tile
     box width=34 height=34 border-radius=9 background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
       image symbol color="-exact-system-blue"
 
-// An app's first letter on a tinted tile, where its icon would be.
-component Monogram
+// An app's icon as the Mac draws it, or, until the Mac sends it (or a Mac too old to), its first
+// letter on a tile the size a Mac icon's own square is within its frame.
+component AppIcon
   props
     name: string
+    icon: string
+    size: number
   view
-    box width="2.125rem" height="2.125rem" border-radius=9 background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
-      text name.slice(0, 1).toUpperCase() font="-exact-headline" color="-exact-system-blue"
+    if icon != ""
+      image icon width=`${size / 16}rem` height=`${size / 16}rem` object-fit="contain" aria-hidden=true testId=`icon-${slug(name)}`
+    else
+      box width=`${size / 16}rem` height=`${size / 16}rem` display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
+        box width=`${size * 0.82 / 16}rem` height=`${size * 0.82 / 16}rem` border-radius=`${size * 0.19 / 16}rem` background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center"
+          text name.slice(0, 1).toUpperCase() font="-exact-title2" font-weight=600 color="-exact-system-blue"
+
+// A labelled share with its bar, for Control's glance at the Mac's load.
+component Gauge
+  props
+    id: string
+    label: string
+    value: string
+    fraction: number
+  view
+    column flex=1 min-width=0 gap=8 padding=12 border-radius=12 background-color="-exact-tertiary-fill"
+      row align-items="baseline" gap=6
+        text label font="-exact-footnote" color="-exact-secondary-label" flex=1
+        text value font="-exact-headline" font-variant-numeric="tabular-nums" testId=id
+      Meter(fraction=fraction)
 
 // A row's bar: its share of the busiest row's, in the accent over a faint track.
 component Meter
@@ -937,30 +1099,35 @@ component Meter
     box height=4 border-radius=2 background-color="-exact-tertiary-fill" overflow="hidden" aria-hidden=true
       box height=4 border-radius=2 width=`${round(max(0.02, fraction) * 100)}%` background-color="-exact-system-blue"
 
-// A process or an app, as its rows and its detail draw it: a symbol on a tinted tile.
+// A process or an app, as its rows and its detail draw it: a symbol on a tinted tile, an app's
+// in the accent, a lone process's quieter.
 component ProcIcon
   props
     group: bool
     size: number
   view
     box width=size height=size border-radius=(size / 4) background-color="-exact-tertiary-fill" display="flex" align-items="center" justify-content="center" flex-shrink=0 aria-hidden=true
-      image (group ? "symbol:layers" : "symbol:package") color="-exact-system-blue" font=(size > 40 ? "-exact-title2" : "-exact-body")
+      image (group ? "symbol:layers" : "symbol:package") color=(group ? "-exact-system-blue" : "-exact-secondary-label") font=(size > 40 ? "-exact-title2" : "-exact-body")
 
-// A row's content: what it is, its bar, and its two numbers, the sorted one first.
+// A row's content, two lines beside its tile: its name over what it is (an app's count, else its
+// pid and, for another user's, whose) and its other number; at the end the sorted number over its
+// bar, in a column as wide on every row so the bars line up.
 component ProcLine
   props
     p: Proc
     byMemory: bool
   view
-    row gap=12 align-items="center" flex=1 min-width=0
-      ProcIcon(group=p.group, size=34)
-      column flex=1 min-width=0 gap=5
-        text p.name font-weight=500 testId=`proc-${p.pid}-name`
+    row gap=12 align-items="center" flex=1 min-width=0 padding="2px 0"
+      ProcIcon(group=p.group, size=36)
+      column flex=1 min-width=0 gap=2
+        text p.name font-weight=600 line-clamp=1 testId=`proc-${p.pid}-name`
+        row gap=4 align-items="baseline" min-width=0
+          text (p.group ? processesText(p.count) : `PID ${p.detail}`) font="-exact-footnote" color="-exact-secondary-label" line-clamp=1 flex-shrink=1 min-width=0
+          text "·" font="-exact-footnote" color="-exact-tertiary-label" flex-shrink=0 aria-hidden=true
+          text (byMemory ? `${p.cpu}% CPU` : p.memory) font="-exact-footnote" color="-exact-secondary-label" font-variant-numeric="tabular-nums" white-space="nowrap" flex-shrink=0 testId=`proc-${p.pid}-${byMemory ? "cpu" : "memory"}`
+      column width="4.75rem" gap=6 flex-shrink=0
+        text (byMemory ? p.memory : `${p.cpu}%`) font-weight=600 font-variant-numeric="tabular-nums" text-align="end" white-space="nowrap" testId=`proc-${p.pid}-${byMemory ? "memory" : "cpu"}`
         Meter(fraction=p.bar)
-        text p.detail font="-exact-footnote" color="-exact-secondary-label"
-      column align-items="flex-end" gap=2 flex-shrink=0
-        text (byMemory ? p.memory : `${p.cpu}%`) font-weight=600 font-variant-numeric="tabular-nums" testId=`proc-${p.pid}-${byMemory ? "memory" : "cpu"}`
-        text (byMemory ? `${p.cpu}%` : p.memory) font="-exact-footnote" color="-exact-secondary-label" font-variant-numeric="tabular-nums" testId=`proc-${p.pid}-${byMemory ? "cpu" : "memory"}`
 
 // A labelled number on a tile, for the overview and a process's detail.
 component Stat
